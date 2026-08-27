@@ -203,6 +203,15 @@ flowchart LR
   pkg_cordis_host_runner["cordis-host-runner"]
   svc_dynamicCordisRunner["ctx.dynamicCordisRunner<br/>Dynamic Cordis package host runner"]
   svc_cordisInspect["ctx.cordisInspect<br/>Dynamic Cordis inspect registry"]
+  pkg_collab_auth["collab-auth"]
+  svc_collabAuth["ctx.collabAuth<br/>Google OAuth sign-in and cookie sessions"]
+  pkg_collab_api["collab-api"]
+  pkg_collab_users["collab-users"]
+  svc_collabUsers["ctx.collabUsers<br/>Google-identity account registry"]
+  pkg_collab_workspaces["collab-workspaces"]
+  svc_collabWorkspaces["ctx.collabWorkspaces<br/>Invite-only workspace registry"]
+  pkg_collab_rbac["collab-rbac"]
+  svc_rbac["ctx.rbac<br/>Role→permission matrix"]
   pkg_acp --> svc_approval
   pkg_agent --> svc_agents
   pkg_agent_default_model --> svc_agentDefaultModel
@@ -219,6 +228,10 @@ flowchart LR
   pkg_bash_sandbox --> svc_shell
   pkg_code_runtime --> svc_codeRuntime
   pkg_code_runtime_worker --> svc_codeRuntime
+  pkg_collab_auth --> svc_collabAuth
+  pkg_collab_rbac --> svc_rbac
+  pkg_collab_users --> svc_collabUsers
+  pkg_collab_workspaces --> svc_collabWorkspaces
   pkg_commands --> svc_commands
   pkg_compaction --> svc_compaction
   pkg_compaction_basic --> svc_compaction
@@ -323,6 +336,10 @@ flowchart LR
   svc_authorization --> pkg_llm_pi_ai
   svc_clientModules --> pkg_hmr
   svc_codeRuntime --> pkg_tools
+  svc_collabAuth --> pkg_collab_api
+  svc_collabUsers --> pkg_collab_api
+  svc_collabUsers --> pkg_collab_auth
+  svc_collabWorkspaces --> pkg_collab_api
   svc_compaction --> pkg_compaction_basic
   svc_cordisInspect --> pkg_tool_cordis
   svc_credentials --> pkg_apiproxy
@@ -344,6 +361,9 @@ flowchart LR
   svc_llm --> pkg_agent_loop
   svc_llm --> pkg_compaction_basic
   svc_lsp --> pkg_tool_lsp
+  svc_rbac --> pkg_collab_api
+  svc_rbac --> pkg_collab_auth
+  svc_rbac --> pkg_collab_users
   svc_sandbox --> pkg_bash_sandbox
   svc_sandbox --> pkg_terminal_bash
   svc_sandboxPolicy --> pkg_bash_sandbox
@@ -486,5 +506,9 @@ flowchart LR
 | `ctx.apiProxy` | `core` | `apiproxy` | - | `connection` | - | 与传输无关的 Host 网关接口：它分派浏览器 API 调用，每条打开的 Host 流自行订阅转发事件，而不是由广播方法向其推送。 |
 | `ctx.dynamicCordisRunner` | `core` | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) | - | [`tool-cordis`](../packages/extensions/tool-cordis) | - | 拥有内存定义注册表、Host 半的 vm 沙箱和 request-run 往返流程；浏览器页面通过其 Remote 命名空间在线访问同一服务。 |
 | `ctx.cordisInspect` | `core` | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) | - | [`tool-cordis`](../packages/extensions/tool-cordis) | - | 注册 Host inspect 提供方、镜像 Client 提供方 manifest，并通过动态 Cordis 传输路由 Client 查询。 |
+| `ctx.collabAuth` | `core` | [`collab-auth`](../packages/collab/auth) | - | [`collab-api`](../packages/collab/api) | - | 签发授权码交换、持有 HMAC 签名的无状态会话令牌，并通过 collab 用户注册表解析主体。 |
+| `ctx.collabUsers` | `core` | [`collab-users`](../packages/collab/users) | - | [`collab-auth`](../packages/collab/auth), [`collab-api`](../packages/collab/api) | - | 持有规范化邮箱↔Google `sub` 账户、全局 admin/member 角色，以及供认证 fence 消费的客户端安全投影。 |
+| `ctx.collabWorkspaces` | `core` | [`collab-workspaces`](../packages/collab/workspaces) | - | [`collab-api`](../packages/collab/api) | - | 持有邀请生命周期与 admin/developer 成员关系；每个变更都经由 dsh-collab-rbac 授权。 |
+| `ctx.rbac` | `core` | [`collab-rbac`](../packages/collab/rbac) | - | [`collab-api`](../packages/collab/api), [`collab-users`](../packages/collab/users), [`collab-auth`](../packages/collab/auth) | - | 声明实例与工作区角色矩阵，并在做出决策的操作点执行权限检查。 |
 
 维护模式：混合模式。服务从 Cordis 声明中发现；接口、实现和消费方角色在 `scripts/gen-doc-graphs.ts` 中分类，并设有完整性守卫。

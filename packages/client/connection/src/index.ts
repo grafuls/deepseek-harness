@@ -8,6 +8,10 @@ import { toFetchHandler } from '@deepseek-ai/dsh-host-apiproxy'
 import { API_PATH, HOST_EVENTS_PATH, MUX_EVENTS_PATH } from './api-path.ts'
 import { bridge, DEFAULT_MAX_REQUEST_BODY_BYTES } from './http-bridge.ts'
 import { assertTrustedAuthority, isTrustedApiRequest } from './api-request-trust.ts'
+import {
+  connectionFactsFromMessage,
+  runWithConnectionPrincipal,
+} from './principal.ts'
 import { HostConnectionService } from './rpc-host.ts'
 import { rejectWebSocketUpgrade, WebSocketDownlinks } from './websocket-downlink.ts'
 
@@ -19,7 +23,9 @@ export type {
   HostConnectionHandle,
   HostConnectionRpc,
 } from './rpc.ts'
+export type { ConnectionAuthenticatorHandle } from './rpc-host.ts'
 export { HostConnectionService } from './rpc-host.ts'
+export type { ConnectionAuthenticator, ConnectionAuthenticatorFacts } from './principal.ts'
 
 export { API_PATH, HOST_EVENTS_PATH, MUX_EVENTS_PATH } from './api-path.ts'
 
@@ -185,7 +191,14 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
             rejectWebSocketUpgrade(socket)
             return
           }
-          return handle(req, socket, head)
+          void (async () => {
+            const principal = await connection.authenticate(connectionFactsFromMessage(req))
+            if (principal === undefined && connection.requiresAuthentication) {
+              rejectWebSocketUpgrade(socket)
+              return
+            }
+            await runWithConnectionPrincipal(principal, () => handle(req, socket, head))
+          })()
         },
       }), `client-connection: ${path} WebSocket`)
     }

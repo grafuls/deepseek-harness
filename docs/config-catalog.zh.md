@@ -475,6 +475,112 @@ export interface Config {
 
 来源：[`packages/code-runtime/code-runtime-worker-thread/src/index.ts:25`](../packages/code-runtime/code-runtime-worker-thread/src/index.ts)
 
+<a id="deepseek-aidsh-collab-auth"></a>
+
+## `@deepseek-ai/dsh-collab-auth`
+
+```ts config-catalog
+/** Mount-time config: the public surface plus a programmatic gateway override. */
+export interface CollabAuthConfig extends Config {
+  /** OIDC strategy override for the authorization-code exchange (defaults to Google). */
+  gateway?: OidcGateway
+}
+
+/** Plugin config for the Google sign-in surface and cookie session. */
+export interface Config {
+  /** Google OpenID Connect client id. */
+  clientId?: string
+  /** Google OpenID Connect client secret. */
+  clientSecret?: string
+  /** Registered redirect URI (must match the Google console entry). */
+  redirectUri?: string
+  /** Public base URL used to derive the redirect URI when omitted. */
+  baseUrl?: string
+  /** HMAC secret signing session cookies; a dshHome-derived dev default when omitted. */
+  secret?: string
+  /** Harness home used for the dev secret default and shared roots. */
+  dshHome?: string
+  /** Session cookie lifetime in seconds. */
+  sessionTtlSeconds?: number
+  /** Strictness: mark cookies `Secure` (set true behind TLS termination). */
+  secureCookies?: boolean
+  /** OIDC scopes, space-joined for Google. */
+  scopes?: string[]
+  /** Authorization challenge TTL in milliseconds. */
+  stateTtlMs?: number
+}
+
+/**
+ * OIDC strategy seam. The real Google strategy is built on `openid-client`;
+ * tests and alternate providers implement the same facts over their own
+ * transports, so the session machinery stays provider-agnostic.
+ */
+export interface OidcGateway {
+  /** Authorization endpoint family, for diagnostics. */
+  readonly issuer: string
+  /** Build the authorization URL carrying the caller's `state` and `nonce`. */
+  authorizationUrl(state: string, nonce: string): Promise<string>
+  /**
+   * Validate a callback exchange (code, state, nonce) and return the
+   * verified user. Throws when the exchange is invalid.
+   * @param params - raw query/form parameters from the callback request.
+   */
+  userFromCallback(params: Record<string, string>): Promise<OidcUserInfo>
+}
+
+/** Verified identity facts returned by an OIDC strategy for a successful login. */
+export interface OidcUserInfo {
+  /** Stable Google `sub` claim — the identity key. */
+  sub: string
+  /** Verified email (Google sets `email_verified`). */
+  email: string
+  /** Whether the provider confirmed email ownership at this sign-in. */
+  emailVerified: boolean
+  /** Display name preferred by the provider. */
+  name: string
+  /** Profile picture URL, when the provider returns one. */
+  avatarUrl?: string
+}
+```
+
+Source: [`packages/collab/auth/src/index.ts:63`](../packages/collab/auth/src/index.ts)
+
+<a id="deepseek-aidsh-collab-users"></a>
+
+## `@deepseek-ai/dsh-collab-users`
+
+```ts config-catalog
+/** Plugin config: the collab data root and the global-admin policy. */
+export interface Config {
+  /** Collab data directory; defaults to `<harness home>/collab`. */
+  root?: string
+  /** Harness home used when `root` is omitted; defaults to `$DSH_HOME` or `~/.dsh`. */
+  dshHome?: string
+  /** Email allowlist additionally promoted to global admin (case-insensitive). */
+  adminEmails?: string[]
+  /** The first account becomes global admin when no admin exists; defaults to true. */
+  bootstrapFirstAdmin?: boolean
+}
+```
+
+Source: [`packages/collab/users/src/index.ts:60`](../packages/collab/users/src/index.ts)
+
+<a id="deepseek-aidsh-collab-workspaces"></a>
+
+## `@deepseek-ai/dsh-collab-workspaces`
+
+```ts config-catalog
+/** Plugin config: the collab data root. */
+export interface Config {
+  /** Collab data directory; defaults to `<harness home>/collab`. */
+  root?: string
+  /** Harness home used when `root` is omitted; defaults to `$DSH_HOME` or `~/.dsh`. */
+  dshHome?: string
+}
+```
+
+Source: [`packages/collab/workspaces/src/index.ts:80`](../packages/collab/workspaces/src/index.ts)
+
 <a id="deepseek-aidsh-compaction-basic"></a>
 
 ## `@deepseek-ai/dsh-compaction-basic`
@@ -3233,7 +3339,9 @@ export interface Config {
 - `@deepseek-ai/dsh-client-runtime`（[`packages/client/runtime/src/index.ts`](../packages/client/runtime/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-agent-preset`（[`packages/client/ui-agent-preset/src/index.ts`](../packages/client/ui-agent-preset/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-attachment`（[`packages/client/ui-attachment/src/index.ts`](../packages/client/ui-attachment/src/index.ts)）
+- `@deepseek-ai/dsh-client-ui-auth`（[`packages/client/ui-auth/src/index.ts`](../packages/client/ui-auth/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-brand-official`（[`packages/client/ui-brand-official/src/index.ts`](../packages/client/ui-brand-official/src/index.ts)）
+- `@deepseek-ai/dsh-client-ui-collab`（[`packages/client/ui-collab/src/index.ts`](../packages/client/ui-collab/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-commands`（[`packages/client/ui-commands/src/index.ts`](../packages/client/ui-commands/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-conversation`（[`packages/client/ui-conversation/src/index.ts`](../packages/client/ui-conversation/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-cordis`（[`packages/extensions/ui-cordis/src/index.ts`](../packages/extensions/ui-cordis/src/index.ts)）
@@ -3264,6 +3372,8 @@ export interface Config {
 - `@deepseek-ai/dsh-client-ui-user-questions`（[`packages/client/ui-user-questions/src/index.ts`](../packages/client/ui-user-questions/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-workflow-run`（[`packages/client/ui-workflow-run/src/index.ts`](../packages/client/ui-workflow-run/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-workspace`（[`packages/client/ui-workspace/src/index.ts`](../packages/client/ui-workspace/src/index.ts)）
+- `@deepseek-ai/dsh-collab-api` — 需要 `webServer` · `connection` · `collabAuth` · `collabUsers` · `collabWorkspaces`（[`packages/collab/api/src/index.ts`](../packages/collab/api/src/index.ts)）
+- `@deepseek-ai/dsh-collab-rbac`（[`packages/collab/rbac/src/index.ts`](../packages/collab/rbac/src/index.ts)）
 - `@deepseek-ai/dsh-command-compact` — 需要 `commands` · `compact`（[`packages/compaction/command-compact/src/index.ts`](../packages/compaction/command-compact/src/index.ts)）
 - `@deepseek-ai/dsh-command-feedback` — 需要 `commands`（[`packages/feedback/command-feedback/src/index.ts`](../packages/feedback/command-feedback/src/index.ts)）
 - `@deepseek-ai/dsh-command-goal` — 需要 `commands` · `goals`（[`packages/goal/command-goal/src/index.ts`](../packages/goal/command-goal/src/index.ts)）
@@ -3332,6 +3442,7 @@ export interface Config {
 - `@deepseek-ai/dsh-client-web`（[`packages/client/web/src/index.ts`](../packages/client/web/src/index.ts)）
 - `@deepseek-ai/dsh-cmdline`（[`packages/boot/cmdline/src/index.ts`](../packages/boot/cmdline/src/index.ts)）
 - `@deepseek-ai/dsh-code-runtime-python`（[`packages/code-runtime/code-runtime-python/src/index.ts`](../packages/code-runtime/code-runtime-python/src/index.ts)）
+- `@deepseek-ai/dsh-collab-bundle`（[`packages/bundle/collab/src/index.ts`](../packages/bundle/collab/src/index.ts)）
 - `@deepseek-ai/dsh-home-paths`（[`packages/util/home-paths/src/index.ts`](../packages/util/home-paths/src/index.ts)）
 - `@deepseek-ai/dsh-hook-protocol`（[`packages/hooks/hook-protocol/src/index.ts`](../packages/hooks/hook-protocol/src/index.ts)）
 - `@deepseek-ai/dsh-launch-environment`（[`packages/util/launch-environment/src/index.ts`](../packages/util/launch-environment/src/index.ts)）

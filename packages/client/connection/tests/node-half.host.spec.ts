@@ -274,6 +274,7 @@ describe('connection node half', () => {
     await fiber.await()
     const connection = ctx.get('connection') as HostConnectionHandle
     const calls: unknown[] = []
+    const callsSecond: unknown[] = []
     const remove = connection.rpc.intercept(
       '/api',
       endpoint => endpoint === 'goals/create',
@@ -283,12 +284,17 @@ describe('connection node half', () => {
       },
       { authority: 'trusted-host' },
     )
-    expect(() => connection.rpc.intercept(
+    // A second interceptor joins the chain without displacing the first: a
+    // request the first does not claim falls through to the second.
+    const removeFallthrough = connection.rpc.intercept(
       '/api',
-      () => true,
-      async () => ({ ok: true, value: null }),
+      endpoint => endpoint === 'portal.list',
+      async (endpoint, payload) => {
+        callsSecond.push({ endpoint, payload })
+        return { ok: true, value: { fallthrough: true } }
+      },
       { authority: 'trusted-host' },
-    )).toThrow('already has an interceptor')
+    )
     expect(() => connection.rpc.intercept(
       '/rpc' as '/api',
       () => true,
@@ -320,8 +326,22 @@ describe('connection node half', () => {
     expect(denied.state).toMatchObject({ status: 403, body: 'forbidden' })
     expect(calls).toHaveLength(1)
 
+    const fallthrough = fakeResponse()
+    await route.handler(fakePost({ host: '127.0.0.1:3080' }, '/api/portal.list', {
+      type: 'client-request', rpcId: RpcId('rpc-fall'), method: 'portal.list', payload: {},
+    }), fallthrough.response)
+    expect(JSON.parse(String(fallthrough.state.body))).toEqual({
+      type: 'server-response',
+      rpcId: 'rpc-fall',
+      result: { ok: true, value: { fallthrough: true } },
+    })
+    expect(callsSecond).toEqual([{
+      endpoint: 'portal.list',
+      payload: {},
+    }])
+
     const unclaimed = fakeResponse()
-    await route.handler(fakeRequest({ host: '127.0.0.1:3080' }, '/api/session.list'), unclaimed.response)
+    await route.handler(fakeRequest({ host: '127.0.0.1:3080' }, '/api/unknown.method'), unclaimed.response)
     expect(unclaimed.state.status).toBe(404)
 
     await remove()
@@ -329,6 +349,14 @@ describe('connection node half', () => {
     await route.handler(fakePost({ host: '127.0.0.1:3080' }, '/api/goals/create', request), withdrawn.response)
     expect(withdrawn.state.status).toBe(404)
     expect(calls).toHaveLength(1)
+
+    await removeFallthrough()
+    const withdrawnSecond = fakeResponse()
+    await route.handler(fakePost({ host: '127.0.0.1:3080' }, '/api/portal.list', {
+      type: 'client-request', rpcId: RpcId('rpc-fall2'), method: 'portal.list', payload: {},
+    }), withdrawnSecond.response)
+    expect(withdrawnSecond.state.status).toBe(404)
+    expect(callsSecond).toHaveLength(1)
 
     const removeLoopback = connection.rpc.intercept(
       '/api',
@@ -340,6 +368,38 @@ describe('connection node half', () => {
     await route.handler(fakePost({ host: 'harness.example' }, '/api/goals/create', request), loopbackOnly.response)
     expect(loopbackOnly.state.status).toBe(403)
     await removeLoopback()
+    await fiber.dispose()
+  })
+
+  it('disposing a shared-channel interceptor twice is a no-op and leaves siblings intact', async () => {
+    const ctx = new Context()
+    const routes: WebRoute[] = []
+    ctx.provide('webServer', fakeHttpServer(routes, []) as WebServer)
+    ctx.provide('apiProxy', {} as unknown as ApiProxy)
+    const fiber = ctx.plugin({ inject: [...inject], apply }, { trustedHosts: ['harness.example'] })
+    await fiber.await()
+    const connection = ctx.get('connection') as HostConnectionHandle
+    const removeA = connection.rpc.intercept(
+      '/api',
+      endpoint => endpoint === 'a.list',
+      async () => ({ ok: true, value: null }),
+      { authority: 'trusted-host' },
+    )
+    const removeB = connection.rpc.intercept(
+      '/api',
+      endpoint => endpoint === 'b.list',
+      async () => ({ ok: true, value: null }),
+      { authority: 'trusted-host' },
+    )
+    // Re-disposing an already-removed interceptor is inert: the chain still
+    // holds A's sibling, so the stale index miss and the non-empty guard both
+    // keep B in place.
+    await removeA()
+    await removeA()
+    await removeB()
+    // Disposing the last interceptor deletes the chain; a further dispose of
+    // the same interceptor finds no live chain and returns.
+    await removeB()
     await fiber.dispose()
   })
 

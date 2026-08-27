@@ -26,6 +26,7 @@ One page per subsystem of the DeepSeek Harness: what it is, the data structures 
 | [tools.md](tools.md) | `ToolDefinition` full fields, the schema DSL, `ToolExecution`/`ToolResult`, tool-presentation UI types, and the guarded execution pipeline |
 | [user-questions.md](user-questions.md) | the UI-backed human question/answer seam: `AskUserQuestionRequest`, answer/options vocabulary, provider API, error taxonomy |
 | [approval.md](approval.md) | the one-shot user-approval seam: `ApprovalRequest`, `ApprovalOutcome`, per-session policy, audit events, and answerer contracts |
+| [collab.md](collab.md) | the multi-user overlay behind Google OAuth: [dsh-collab-api](../../packages/collab/api) mounts the auth gate, [dsh-collab-auth](../../packages/collab/auth) owns sessions, [dsh-collab-users](../../packages/collab/users) owns the Google-identity registry, and [dsh-collab-workspaces](../../packages/collab/workspaces) owns invite-only workspaces with an admin/developer role model — mounted only through the `web-collab` profile overlay, with the default single-user install unchanged |
 | [attachment.md](attachment.md) | durable image identity and metadata, validation inputs, verified reads, and the `AttachmentStore` seam |
 | [shell.md](shell.md) | the bash executor seam: `ShellExecRequest`/`Spec`, `ShellRunResult`, background `ShellProcess` handles |
 | [subprocess.md](subprocess.md) | the subprocess seam: fully-explicit `SubprocessSpawnSpec`, offset-based output readers, unclassified `SubprocessOutcome`, and the managed `DSH_*` environment vocabulary |

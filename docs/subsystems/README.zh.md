@@ -26,6 +26,7 @@
 | [tools.md](tools.zh.md) | `ToolDefinition` 完整字段、schema DSL、`ToolExecution`/`ToolResult`、工具展示 UI 类型，以及受保护的执行流水线 |
 | [user-questions.md](user-questions.zh.md) | UI 支持的人工问答 seam：`AskUserQuestionRequest`、answer/options 词汇、提供方 API、错误分类体系 |
 | [approval.md](approval.zh.md) | 一次性用户审批 seam：`ApprovalRequest`、`ApprovalOutcome`、逐会话策略、审计事件和 answerer 约定 |
+| [collab.md](collab.zh.md) | Google OAuth 身后的多用户 overlay：[dsh-collab-api](../../packages/collab/api) 挂载登录门禁、[dsh-collab-auth](../../packages/collab/auth) 拥有会话、[dsh-collab-users](../../packages/collab/users) 拥有 Google 身份账户注册表、[dsh-collab-workspaces](../../packages/collab/workspaces) 拥有带 admin/developer 角色模型的邀请制工作区——仅通过 `web-collab` profile overlay 挂载，默认单用户安装保持不变 |
 | [attachment.md](attachment.zh.md) | 持久图片标识与元数据、校验输入、经校验读取，以及 `AttachmentStore` seam |
 | [shell.md](shell.zh.md) | bash 执行器 seam：`ShellExecRequest`/`Spec`、`ShellRunResult`、后台 `ShellProcess` 句柄 |
 | [subprocess.md](subprocess.zh.md) | 子进程 seam：完全显式的 `SubprocessSpawnSpec`、基于偏移的输出读取器、不含分类的 `SubprocessOutcome`，以及受管 `DSH_*` 环境词汇 |

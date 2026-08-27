@@ -562,6 +562,210 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'collabAuth',
+    summary: 'Collab auth service.',
+    description: 'Collab auth service. Startup binds the Google OIDC strategy and the required collab user registry; session resolution is a pure function of the cookie and the registry, keeping authenticated requests off any store path.',
+    methods: [
+      {
+        signature: 'readonly gateway: OidcGateway',
+        description: 'The OIDC strategy carrying the authorization-code exchange.',
+        parameters: [],
+      },
+      {
+        signature: 'async loginUrl(redirectTo: string = \'/\'): Promise<string>',
+        description: 'Begin a sign-in: stash an anti-CSRF challenge and return the provider\'s authorization URL.',
+        parameters: [{ name: 'redirectTo', description: 'where the browser lands after the callback (default `/`).' }],
+        returns: 'the provider authorization URL carrying `state` and `nonce`.',
+      },
+      {
+        signature: 'async completeLogin(params: Record<string, string>): Promise<LoginOutcome>',
+        description: 'Finish a sign-in from the callback parameters: validate the exchange against the pending challenge, upsert the Google identity, mint a session token, and return the outcome for the host to apply.',
+        parameters: [{ name: 'params', description: 'raw callback query/form parameters (`code`, `state`, `nonce`).' }],
+        returns: 'the post-login location and the session token to set.',
+      },
+      {
+        signature: 'resolve(token: string | undefined, nowMs: number = Date.now()): CollabPrincipal | undefined',
+        description: 'Resolve the principal for a session cookie value, or undefined when the token, its signature, its expiry, or the account is invalid. Never throws on attacker-supplied tokens — it is the auth fence\'s hot path.',
+        parameters: [{ name: 'token', description: 'raw session token, or undefined for an unauthenticated call.' }, { name: 'nowMs', description: 'clock instant used for the expiry check (for tests).' }],
+        returns: 'the resolved principal, or undefined when unauthenticated.',
+      },
+      {
+        signature: 'createSessionToken(userId: UserId, nowMs: number = Date.now()): string',
+        description: 'Mint a session token for an account (primarily for tests and tooling).',
+        parameters: [{ name: 'userId', description: 'account the token authenticates.' }, { name: 'nowMs', description: 'clock instant used for `iat`/`exp` (for tests).' }],
+        returns: 'the freshly signed session token.',
+      },
+      {
+        signature: 'cookieValue(token: string): string',
+        description: 'The `Set-Cookie` value that mints this service\'s session.',
+        parameters: [{ name: 'token', description: 'session token to hand the browser.' }],
+        returns: 'the `Set-Cookie` value.',
+      },
+      {
+        signature: 'clearCookieValue(): string',
+        description: 'The `Set-Cookie` value that clears this service\'s session.',
+        parameters: [],
+        returns: 'the `Set-Cookie` value.',
+      },
+    ],
+  },
+  {
+    key: 'collabUsers',
+    summary: 'Durable collab user registry.',
+    description: 'Durable collab user registry. Startup loads or mints the `users.json` document; every mutation is serialized behind one operation tail and committed with an atomic write before the change event is emitted.',
+    methods: [
+      {
+        signature: 'findOrCreateByGoogle(profile: GoogleProfile): Promise<UserRecord>',
+        description: 'Create or refresh a user account from Google identity facts. Matches an existing account by `googleSub` or normalized email, updates the display facts, and records the sign-in; otherwise mints the account with the global-admin bootstrap policy.',
+        parameters: [{ name: 'profile', description: 'Google identity for the sign-in.' }],
+        returns: 'the current durable account.',
+      },
+      {
+        signature: 'findById(id: UserId): UserRecord | undefined',
+        description: 'Synchronous account lookup (the auth fence hot path).',
+        parameters: [{ name: 'id', description: 'the account to find.' }],
+        returns: 'the record, or undefined when unknown.',
+      },
+      {
+        signature: 'findByEmail(email: string): UserRecord | undefined',
+        description: 'Synchronous account lookup by normalized email.',
+        parameters: [{ name: 'email', description: 'email to search (normalized before matching).' }],
+        returns: 'the record, or undefined when unknown.',
+      },
+      {
+        signature: 'list(): readonly UserRecord[]',
+        description: 'Every account in registry order (admin surface; callers authorize).',
+        parameters: [],
+        returns: 'the frozen registry snapshot.',
+      },
+      {
+        signature: 'profileOf(record: UserRecord): UserProfile',
+        description: 'Client-safe projection of one account.',
+        parameters: [{ name: 'record', description: 'the stored account record.' }],
+        returns: 'the projected profile for client surfaces.',
+      },
+      {
+        signature: 'async setGlobalRole(actorRole: GlobalRole, id: UserId, role: GlobalRole): Promise<UserRecord>',
+        description: 'Change one account\'s global role. Requires the acting user to hold `users.manage`; refuses to demote the last enabled admin.',
+        parameters: [{ name: 'actorRole', description: 'the acting user\'s global role.' }, { name: 'id', description: 'the target account.' }, { name: 'role', description: 'the role to assign.' }],
+        returns: 'the updated account.',
+      },
+      {
+        signature: 'async setDisabled(actorRole: GlobalRole, id: UserId, disabled: boolean): Promise<UserRecord>',
+        description: 'Block or unblock an account. Requires the acting user to hold `users.manage`; refuses to disable the last enabled admin.',
+        parameters: [{ name: 'actorRole', description: 'the acting user\'s global role.' }, { name: 'id', description: 'the target account.' }, { name: 'disabled', description: 'desired block state.' }],
+        returns: 'the updated account.',
+      },
+      {
+        signature: 'async touch(id: UserId): Promise<void>',
+        description: 'Record a sign-in timestamp. Updates memory on every call but writes the document only after TOUCH_PERSIST_INTERVAL_MS elapses, keeping the auth fence off the disk write path.',
+        parameters: [{ name: 'id', description: 'the signed-in account.' }],
+        returns: 'resolution once any triggered persist commits.',
+      },
+    ],
+  },
+  {
+    key: 'collabWorkspaces',
+    summary: 'Durable collab workspace registry.',
+    description: 'Durable collab workspace registry. Startup loads or mints the `workspaces.json` document; every mutation is serialized behind one operation tail and committed with an atomic write before the change event is emitted.',
+    methods: [
+      {
+        signature: 'findById(id: WorkspaceId): WorkspaceRecord | undefined',
+        description: 'Synchronous workspace lookup by id.',
+        parameters: [{ name: 'id', description: 'the workspace to find.' }],
+        returns: 'the record, or undefined when unknown.',
+      },
+      {
+        signature: 'findInvitationById(id: InvitationId): WorkspaceInvitation | undefined',
+        description: 'Synchronous invitation lookup by id.',
+        parameters: [{ name: 'id', description: 'the invitation to find.' }],
+        returns: 'the record, or undefined when unknown.',
+      },
+      {
+        signature: 'roleOf(workspaceId: WorkspaceId, userId: UserId): WorkspaceRole | undefined',
+        description: 'Synchronous per-member role lookup (the collab API hot path).',
+        parameters: [{ name: 'workspaceId', description: 'the workspace to inspect.' }, { name: 'userId', description: 'the member to find.' }],
+        returns: 'the member\'s workspace role, or undefined when not a member.',
+      },
+      {
+        signature: 'memberOf(workspaceId: WorkspaceId, userId: UserId): WorkspaceMember | undefined',
+        description: 'Synchronous per-member lookup.',
+        parameters: [{ name: 'workspaceId', description: 'the workspace to inspect.' }, { name: 'userId', description: 'the member to find.' }],
+        returns: 'the membership, or undefined when not a member.',
+      },
+      {
+        signature: 'listFor(userId: UserId): WorkspaceSummary[]',
+        description: 'Every workspace the user is a member of, as client-safe summaries.',
+        parameters: [{ name: 'userId', description: 'the member whose workspace list is requested.' }],
+        returns: 'the client-safe summary per membership.',
+      },
+      {
+        signature: 'async create(actorGlobalRole: GlobalRole, actorId: UserId, name: string): Promise<WorkspaceRecord>',
+        description: 'Create a workspace. Any authenticated user may create one; the creator becomes the owner and its first `admin` member.',
+        parameters: [{ name: 'actorGlobalRole', description: 'the acting user\'s global role (needs `workspace.create`).' }, { name: 'actorId', description: 'the creating user.' }, { name: 'name', description: 'display name (trimmed; must not be empty).' }],
+        returns: 'the new workspace.',
+      },
+      {
+        signature: 'async get(actorWorkspaceRole: WorkspaceRole, actorId: UserId, id: WorkspaceId): Promise<WorkspaceRecord>',
+        description: 'Read one workspace the actor is a member of.',
+        parameters: [{ name: 'actorWorkspaceRole', description: 'the acting workspace role (needs `workspace.use`).' }, { name: 'actorId', description: 'the acting user.' }, { name: 'id', description: 'the workspace.' }],
+        returns: 'the workspace record.',
+      },
+      {
+        signature: 'async invite( actorWorkspaceRole: WorkspaceRole, workspaceId: WorkspaceId, actorId: UserId, email: string, role: WorkspaceRole = \'developer\', ): Promise<WorkspaceInvitation>',
+        description: 'Invite a user into a workspace by normalized email.',
+        parameters: [{ name: 'actorWorkspaceRole', description: 'the acting workspace role (needs `workspace.invite`).' }, { name: 'workspaceId', description: 'the target workspace.' }, { name: 'actorId', description: 'the inviting user (recorded as `createdBy`).' }, { name: 'email', description: 'the invitee\'s email.' }, { name: 'role', description: 'the role the invitee receives on joining (defaults to `developer`).' }],
+        returns: 'the new invitation.',
+      },
+      {
+        signature: 'async listInvitations(actorWorkspaceRole: WorkspaceRole, workspaceId: WorkspaceId): Promise<WorkspaceInvitation[]>',
+        description: 'List every invitation of a workspace, pending or otherwise.',
+        parameters: [{ name: 'actorWorkspaceRole', description: 'the acting workspace role (needs `workspace.invite`).' }, { name: 'workspaceId', description: 'the target workspace.' }],
+        returns: 'every invitation for the workspace, pending or otherwise.',
+      },
+      {
+        signature: 'async revokeInvitation( actorWorkspaceRole: WorkspaceRole, workspaceId: WorkspaceId, invitationId: InvitationId, ): Promise<WorkspaceInvitation>',
+        description: 'Revoke a pending invitation (idempotent).',
+        parameters: [{ name: 'actorWorkspaceRole', description: 'the acting workspace role (needs `workspace.invite`).' }, { name: 'workspaceId', description: 'the target workspace.' }, { name: 'invitationId', description: 'the invitation to revoke.' }],
+        returns: 'the revoked invitation.',
+      },
+      {
+        signature: 'async join( actorGlobalRole: GlobalRole, actorId: UserId, email: string, invitationId: InvitationId, ): Promise<WorkspaceRecord>',
+        description: 'Join a workspace by consuming a pending invitation addressed to the acting user\'s email.',
+        parameters: [{ name: 'actorGlobalRole', description: 'the acting user\'s global role (needs `workspace.join`).' }, { name: 'actorId', description: 'the joining user.' }, { name: 'email', description: 'the acting user\'s verified email (must match the invitation).' }, { name: 'invitationId', description: 'the invitation to consume.' }],
+        returns: 'the joined workspace.',
+      },
+      {
+        signature: 'async leave(actorWorkspaceRole: WorkspaceRole, actorId: UserId, workspaceId: WorkspaceId): Promise<void>',
+        description: 'Leave a workspace voluntarily. The owner cannot leave — delete the workspace instead.',
+        parameters: [{ name: 'actorWorkspaceRole', description: 'the acting workspace role (needs `workspace.use`).' }, { name: 'actorId', description: 'the leaving member.' }, { name: 'workspaceId', description: 'the workspace.' }],
+      },
+      {
+        signature: 'async listMembers(actorWorkspaceRole: WorkspaceRole, workspaceId: WorkspaceId): Promise<WorkspaceMember[]>',
+        description: 'List the members of a workspace.',
+        parameters: [{ name: 'actorWorkspaceRole', description: 'the acting workspace role (needs `workspace.members.read`).' }, { name: 'workspaceId', description: 'the workspace.' }],
+        returns: 'the member list.',
+      },
+      {
+        signature: 'async setMemberRole( actorWorkspaceRole: WorkspaceRole, workspaceId: WorkspaceId, userId: UserId, role: WorkspaceRole, ): Promise<WorkspaceMember>',
+        description: 'Change a member\'s role. The owner stays `admin`; the last `admin` member cannot be demoted.',
+        parameters: [{ name: 'actorWorkspaceRole', description: 'the acting workspace role (needs `workspace.members.manage`).' }, { name: 'workspaceId', description: 'the workspace.' }, { name: 'userId', description: 'the target member.' }, { name: 'role', description: 'the role to assign.' }],
+        returns: 'the updated membership.',
+      },
+      {
+        signature: 'async removeMember( actorWorkspaceRole: WorkspaceRole, workspaceId: WorkspaceId, userId: UserId, ): Promise<WorkspaceRecord>',
+        description: 'Remove a member from a workspace. The owner cannot be removed; the last `admin` member cannot be removed.',
+        parameters: [{ name: 'actorWorkspaceRole', description: 'the acting workspace role (needs `workspace.members.manage`).' }, { name: 'workspaceId', description: 'the workspace.' }, { name: 'userId', description: 'the member to remove.' }],
+        returns: 'the updated workspace.',
+      },
+      {
+        signature: 'async delete(actorWorkspaceRole: WorkspaceRole, workspaceId: WorkspaceId): Promise<void>',
+        description: 'Delete a workspace and every invitation into it.',
+        parameters: [{ name: 'actorWorkspaceRole', description: 'the acting workspace role (needs `workspace.delete`).' }, { name: 'workspaceId', description: 'the workspace.' }],
+      },
+    ],
+  },
+  {
     key: 'commands',
     summary: 'Human-command registry.',
     description: 'Human-command registry. Plain-context definitions are global; definitions registered through a command-injected child of an agent context shadow globals for that agent.',
@@ -1131,6 +1335,33 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Select whether plan mode should be active. Between turns the method appends the change immediately because no in-turn pre-step will run until another prompt starts a turn. The open-turn fold is the idle signal: agent status stays `running` through post-turn checkpointing, when no further in-turn pre-step runs. During an open turn the selection remains pending until the next accepted in-turn pre-step. Repeated selection of the current or already-pending state is a no-op.',
         parameters: [{ name: 'agent', description: 'The agent to switch.' }, { name: 'active', description: 'Whether plan mode should be active.' }],
         returns: 'what happened: `committed` (logged now), `queued` (awaiting the next accepted in-turn pre-step), `cancelled` (an opposite pending selection was cleared; the logged state already matches), or `noop` (already in that state).',
+      },
+    ],
+  },
+  {
+    key: 'rbac',
+    summary: 'The policy as a Cordis service, so collab consumers can inject one name and swap implementations without importing this package\'s functions.',
+    description: 'The policy as a Cordis service, so collab consumers can inject one name and swap implementations without importing this package\'s functions. The methods are the pure functions; the class adds no semantics.',
+    methods: [
+      {
+        signature: 'globalCan: (role: GlobalRole, permission: GlobalPermission) => boolean = hasGlobalPermission',
+        description: 'Whether a global role holds an instance-wide permission.',
+        parameters: [],
+      },
+      {
+        signature: 'workspaceCan: (role: WorkspaceRole, permission: WorkspacePermission) => boolean = hasWorkspacePermission',
+        description: 'Whether a workspace role holds a permission inside its workspace.',
+        parameters: [],
+      },
+      {
+        signature: 'globalAuthorize: (role: GlobalRole, permission: GlobalPermission) => void = authorizeGlobal',
+        description: 'Enforce an instance-wide permission, throwing `CollabForbiddenError` on denial.',
+        parameters: [],
+      },
+      {
+        signature: 'workspaceAuthorize: (role: WorkspaceRole, permission: WorkspacePermission) => void = authorizeWorkspace',
+        description: 'Enforce a workspace permission, throwing `CollabForbiddenError` on denial.',
+        parameters: [],
       },
     ],
   },
@@ -2494,6 +2725,22 @@ export const EVENT_API: readonly EventApiEntry[] = [
     parameters: [{ name: 'key', description: 'the credential record the finished attempt was authorizing.' }, { name: 'settlement', description: 'how it ended, including the `failed` case its caller sees as a thrown error.' }],
   },
   {
+    name: 'collab/users/changed',
+    mode: 'emit',
+    signature: '\'collab/users/changed\'(records: readonly UserRecord[]): void',
+    summary: 'A collab user account was created or mutated; carries the frozen post-commit snapshot in registry order.',
+    description: 'A collab user account was created or mutated; carries the frozen post-commit snapshot in registry order.',
+    parameters: [{ name: 'records', description: 'every user record after the committed mutation.' }],
+  },
+  {
+    name: 'collab/workspaces/changed',
+    mode: 'emit',
+    signature: '\'collab/workspaces/changed\'(snapshot: WorkspaceRegistrySnapshot): void',
+    summary: 'A collab workspace or invitation was created, mutated, or removed; carries the frozen post-commit snapshot.',
+    description: 'A collab workspace or invitation was created, mutated, or removed; carries the frozen post-commit snapshot.',
+    parameters: [{ name: 'snapshot', description: 'frozen workspaces and invitations after the commit.' }],
+  },
+  {
     name: 'commands/change',
     mode: 'emit',
     signature: '\'commands/change\'(): void',
@@ -3058,6 +3305,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface CodeRunResult {\n    value?: CodeJsonValue;\n    logs: string[];\n    error?: CodeRunFailure;\n}',
   },
   {
+    name: 'CollabPrincipal',
+    declaration: 'export interface CollabPrincipal {\n    userId: UserId;\n    email: string;\n    name: string;\n    globalRole: GlobalRole;\n    disabled: boolean;\n}',
+  },
+  {
     name: 'CollectedOutput',
     declaration: 'export interface CollectedOutput {\n    text: string;\n    truncated: boolean;\n    spillPath?: string;\n}',
   },
@@ -3414,6 +3665,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface GenericResultView {\n    card: \'generic\';\n    title?: string;\n    content?: ContentBlock[];\n}',
   },
   {
+    name: 'GlobalPermission',
+    declaration: 'export type GlobalPermission = \'users.read\' | \'users.manage\' | \'users.self\' | \'workspace.create\' | \'workspace.join\';',
+  },
+  {
+    name: 'GlobalRole',
+    declaration: 'export type GlobalRole = \'admin\' | \'member\';',
+  },
+  {
     name: 'GoalActivation',
     declaration: 'export type GoalActivation = \'armed\' | \'disarmed\';',
   },
@@ -3440,6 +3699,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'GoalView',
     declaration: 'export interface GoalView extends GoalSnapshot {\n    readonly roundsStarted: number;\n    readonly createdAt: number;\n    readonly updatedAt: number;\n    readonly activation: GoalActivation;\n}',
+  },
+  {
+    name: 'GoogleProfile',
+    declaration: 'export interface GoogleProfile {\n    sub: string;\n    email: string;\n    name: string;\n    avatarUrl?: string;\n}',
   },
   {
     name: 'GrantRecord',
@@ -3650,6 +3913,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export class LlmRuntime extends Service {\n    constructor(ctx: Context);\n    registerAdapter(providers: string[], adapter: LlmAdapter): AdapterRegistrationHandle;\n    listProviders(): LlmProviderInfo[];\n    registerConfigurableProviders(entries: readonly LlmConfigurableProvider[]): DirectoryRegistrationHandle;\n    listConfigurableProviders(): LlmConfigurableProvider[];\n    registerModelDiscovery(settingsNs: string, discover: (request: LlmModelDiscoveryRequest) => Promise<readonly LlmDiscoveredModel[]>): () => void;\n    async discoverModels(settingsNs: string, request: LlmModelDiscoveryRequest): Promise<LlmDiscoveredModel[]>;\n    providerRetryPolicy(provider: string): ResolvedRetryPolicy;\n    async listModels(provider: string): Promise<LlmModelInfo[]>;\n    async resolveModelInfo(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;\n    async resolveCallConfig(config: LlmCallConfig, signal?: AbortSignal): Promise<LlmCallConfig>;\n    async prepareCall(config: LlmCallConfig, signal?: AbortSignal): Promise<PreparedLlmCall>;\n    stream(options: GenerateOptions): AsyncIterable<StreamChunk>;\n}',
   },
   {
+    name: 'LoginOutcome',
+    declaration: 'export interface LoginOutcome {\n    location: string;\n    sessionToken: string;\n    principal: CollabPrincipal;\n}',
+  },
+  {
     name: 'LspHover',
     declaration: 'export interface LspHover {\n    readonly contents: string;\n    readonly range?: LspRange;\n}',
   },
@@ -3800,6 +4067,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ObjectJsonSchema',
     declaration: 'export type ObjectJsonSchema = JsonSchemaNode & {\n    type: \'object\';\n};',
+  },
+  {
+    name: 'OidcGateway',
+    declaration: 'export interface OidcGateway {\n    readonly issuer: string;\n    authorizationUrl(state: string, nonce: string): Promise<string>;\n    userFromCallback(params: Record<string, string>): Promise<OidcUserInfo>;\n}',
+  },
+  {
+    name: 'OidcUserInfo',
+    declaration: 'export interface OidcUserInfo {\n    sub: string;\n    email: string;\n    emailVerified: boolean;\n    name: string;\n    avatarUrl?: string;\n}',
   },
   {
     name: 'OneShotSubagentDescriptorData',
@@ -4934,8 +5209,16 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface UserMessage extends Message {\n    readonly role: \'user\';\n}',
   },
   {
+    name: 'UserProfile',
+    declaration: 'export interface UserProfile {\n    id: UserId;\n    email: string;\n    name: string;\n    avatarUrl?: string;\n    globalRole: GlobalRole;\n}',
+  },
+  {
     name: 'UserQuestionProvider',
     declaration: 'export interface UserQuestionProvider {\n    ask(request: AskUserQuestionRequest): Promise<AskUserQuestionAnswer>;\n}',
+  },
+  {
+    name: 'UserRecord',
+    declaration: 'export interface UserRecord {\n    id: UserId;\n    googleSub: string;\n    email: string;\n    name: string;\n    avatarUrl: string | undefined;\n    globalRole: GlobalRole;\n    disabled: boolean;\n    createdAt: string;\n    updatedAt: string;\n    lastSeenAt: string | undefined;\n}',
   },
   {
     name: 'WebBootEntry',
@@ -5052,6 +5335,30 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'WorkflowStopReason',
     declaration: 'export type WorkflowStopReason = \'completed\' | \'cancelled\' | \'error\';',
+  },
+  {
+    name: 'WorkspaceInvitation',
+    declaration: 'export interface WorkspaceInvitation {\n    id: InvitationId;\n    workspaceId: WorkspaceId;\n    email: string;\n    role: WorkspaceRole;\n    createdBy: UserId;\n    createdAt: string;\n    revoked: boolean;\n    usedAt?: string;\n}',
+  },
+  {
+    name: 'WorkspaceMember',
+    declaration: 'export interface WorkspaceMember {\n    userId: UserId;\n    role: WorkspaceRole;\n    joinedAt: string;\n}',
+  },
+  {
+    name: 'WorkspacePermission',
+    declaration: 'export type WorkspacePermission = \'workspace.delete\' | \'workspace.invite\' | \'workspace.manage\' | \'workspace.members.manage\' | \'workspace.members.read\' | \'workspace.use\';',
+  },
+  {
+    name: 'WorkspaceRegistrySnapshot',
+    declaration: 'export interface WorkspaceRegistrySnapshot {\n    workspaces: readonly WorkspaceRecord[];\n    invitations: readonly WorkspaceInvitation[];\n}',
+  },
+  {
+    name: 'WorkspaceRole',
+    declaration: 'export type WorkspaceRole = \'admin\' | \'developer\';',
+  },
+  {
+    name: 'WorkspaceSummary',
+    declaration: 'export interface WorkspaceSummary {\n    id: WorkspaceId;\n    name: string;\n    memberCount: number;\n    isOwner: boolean;\n    role: WorkspaceRole;\n    createdAt: string;\n}',
   },
 ]
 

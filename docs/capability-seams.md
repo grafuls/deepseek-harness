@@ -201,6 +201,15 @@ flowchart LR
   pkg_cordis_host_runner["cordis-host-runner"]
   svc_dynamicCordisRunner["ctx.dynamicCordisRunner<br/>Dynamic Cordis package host runner"]
   svc_cordisInspect["ctx.cordisInspect<br/>Dynamic Cordis inspect registry"]
+  pkg_collab_auth["collab-auth"]
+  svc_collabAuth["ctx.collabAuth<br/>Google OAuth sign-in and cookie sessions"]
+  pkg_collab_api["collab-api"]
+  pkg_collab_users["collab-users"]
+  svc_collabUsers["ctx.collabUsers<br/>Google-identity account registry"]
+  pkg_collab_workspaces["collab-workspaces"]
+  svc_collabWorkspaces["ctx.collabWorkspaces<br/>Invite-only workspace registry"]
+  pkg_collab_rbac["collab-rbac"]
+  svc_rbac["ctx.rbac<br/>Role→permission matrix"]
   pkg_acp --> svc_approval
   pkg_agent --> svc_agents
   pkg_agent_default_model --> svc_agentDefaultModel
@@ -217,6 +226,10 @@ flowchart LR
   pkg_bash_sandbox --> svc_shell
   pkg_code_runtime --> svc_codeRuntime
   pkg_code_runtime_worker --> svc_codeRuntime
+  pkg_collab_auth --> svc_collabAuth
+  pkg_collab_rbac --> svc_rbac
+  pkg_collab_users --> svc_collabUsers
+  pkg_collab_workspaces --> svc_collabWorkspaces
   pkg_commands --> svc_commands
   pkg_compaction --> svc_compaction
   pkg_compaction_basic --> svc_compaction
@@ -321,6 +334,10 @@ flowchart LR
   svc_authorization --> pkg_llm_pi_ai
   svc_clientModules --> pkg_hmr
   svc_codeRuntime --> pkg_tools
+  svc_collabAuth --> pkg_collab_api
+  svc_collabUsers --> pkg_collab_api
+  svc_collabUsers --> pkg_collab_auth
+  svc_collabWorkspaces --> pkg_collab_api
   svc_compaction --> pkg_compaction_basic
   svc_cordisInspect --> pkg_tool_cordis
   svc_credentials --> pkg_apiproxy
@@ -342,6 +359,9 @@ flowchart LR
   svc_llm --> pkg_agent_loop
   svc_llm --> pkg_compaction_basic
   svc_lsp --> pkg_tool_lsp
+  svc_rbac --> pkg_collab_api
+  svc_rbac --> pkg_collab_auth
+  svc_rbac --> pkg_collab_users
   svc_sandbox --> pkg_bash_sandbox
   svc_sandbox --> pkg_terminal_bash
   svc_sandboxPolicy --> pkg_bash_sandbox
@@ -484,5 +504,9 @@ flowchart LR
 | `ctx.apiProxy` | `core` | `apiproxy` | - | `connection` | - | The transport-agnostic host gateway face: it dispatches browser API calls, and each open host stream subscribes to the events it forwards rather than being pushed to through a broadcast verb. |
 | `ctx.dynamicCordisRunner` | `core` | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) | - | [`tool-cordis`](../packages/extensions/tool-cordis) | - | Owns the in-memory definition registry, the vm sandbox for host halves, and the request-run round trip; browser pages reach the same service over the wire through its remote namespace. |
 | `ctx.cordisInspect` | `core` | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) | - | [`tool-cordis`](../packages/extensions/tool-cordis) | - | Registers host inspect providers, mirrors the client provider manifest, and routes client queries through the dynamic Cordis transport. |
+| `ctx.collabAuth` | `core` | [`collab-auth`](../packages/collab/auth) | - | [`collab-api`](../packages/collab/api) | - | Issues the authorization-code exchange, owns HMAC-signed stateless session tokens, and resolves the principal through the collab user registry. |
+| `ctx.collabUsers` | `core` | [`collab-users`](../packages/collab/users) | - | [`collab-auth`](../packages/collab/auth), [`collab-api`](../packages/collab/api) | - | Owns the normalized email↔Google `sub` accounts, the global admin/member roles, and the client-safe projection consumed by the auth fence. |
+| `ctx.collabWorkspaces` | `core` | [`collab-workspaces`](../packages/collab/workspaces) | - | [`collab-api`](../packages/collab/api) | - | Owns the invitation lifecycle and admin/developer membership; every mutation authorizes through dsh-collab-rbac. |
+| `ctx.rbac` | `core` | [`collab-rbac`](../packages/collab/rbac) | - | [`collab-api`](../packages/collab/api), [`collab-users`](../packages/collab/users), [`collab-auth`](../packages/collab/auth) | - | Declares the instance and workspace role matrices and enforces the permission check at the operation that makes the decision. |
 
 Maintenance mode: hybrid: services are discovered from Cordis declarations; interface/implementation/consumer roles are classified in `scripts/gen-doc-graphs.ts` with a completeness guard.

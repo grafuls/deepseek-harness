@@ -1,0 +1,38 @@
+# The dsh-collab-bundle patch: the multi-user collab overlay over the dsh-base
+# and dsh-web-app layers. Apply this third layer (e.g.
+# `dsh --profile web-collab`) to turn the shared web process into a
+# Google-OAuth multi-user instance. Without this layer the default single-user
+# web profile is unchanged.
+#
+# The collab-auth row deliberately carries NO OAuth credentials: an operator
+# supplies clientId/clientSecret/secret (and baseUrl/secureCookies when the
+# deployment is not a plain loopback dev bind) in the profile's cordis.patch.yml
+# by id before users sign in. The collab data root defaults to `<dshHome>/collab`,
+# where the durable user/workspace registries and the per-workspace data
+# directories live.
+- insert:
+    - id: collab-users
+      name: '@deepseek-ai/dsh-collab-users'
+
+    - id: collab-workspaces
+      name: '@deepseek-ai/dsh-collab-workspaces'
+
+    - id: collab-auth
+      name: '@deepseek-ai/dsh-collab-auth'
+
+    - id: collab-api
+      name: '@deepseek-ai/dsh-collab-api'
+
+    # Browser half: the collab sign-in gate. This row declares dsh.client, so
+    # the modules roster serves its bundle; the sign-in overlay renders only
+    # while the collab surface reports unauthenticated (single-user installs
+    # are visually unchanged).
+    - id: ui-auth
+      name: '@deepseek-ai/dsh-client-ui-auth'
+
+    # Browser half: the collab workspaces manager. This row declares
+    # dsh.client, so the modules roster serves its bundle; the foot action and
+    # the overlay panel render only while the collab surface reports ready
+    # (single-user installs are visually unchanged).
+    - id: ui-collab
+      name: '@deepseek-ai/dsh-client-ui-collab'

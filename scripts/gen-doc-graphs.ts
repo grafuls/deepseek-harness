@@ -589,6 +589,38 @@ const SERVICE_ROLES: ServiceRole[] = [
     consumers: ['tool-cordis'],
     note: 'Registers host inspect providers, mirrors the client provider manifest, and routes client queries through the dynamic Cordis transport.',
   },
+  {
+    key: 'collabAuth',
+    pkg: 'collab-auth',
+    title: 'Google OAuth sign-in and cookie sessions',
+    mode: 'core',
+    consumers: ['collab-api'],
+    note: 'Issues the authorization-code exchange, owns HMAC-signed stateless session tokens, and resolves the principal through the collab user registry.',
+  },
+  {
+    key: 'collabUsers',
+    pkg: 'collab-users',
+    title: 'Google-identity account registry',
+    mode: 'core',
+    consumers: ['collab-auth', 'collab-api'],
+    note: 'Owns the normalized email↔Google `sub` accounts, the global admin/member roles, and the client-safe projection consumed by the auth fence.',
+  },
+  {
+    key: 'collabWorkspaces',
+    pkg: 'collab-workspaces',
+    title: 'Invite-only workspace registry',
+    mode: 'core',
+    consumers: ['collab-api'],
+    note: 'Owns the invitation lifecycle and admin/developer membership; every mutation authorizes through dsh-collab-rbac.',
+  },
+  {
+    key: 'rbac',
+    pkg: 'collab-rbac',
+    title: 'Role→permission matrix',
+    mode: 'core',
+    consumers: ['collab-api', 'collab-users', 'collab-auth'],
+    note: 'Declares the instance and workspace role matrices and enforces the permission check at the operation that makes the decision.',
+  },
 ]
 
 function generatedHeader(title: string): string[] {

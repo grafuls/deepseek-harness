@@ -37,7 +37,9 @@ export interface HostConnectionRpc {
   ): () => Promise<void>
 
   /**
-   * Intercept owned endpoints on the shared `/api` channel before its fallback.
+   * Intercept endpoints it owns on the shared `/api` channel before its
+   * fallback. Interceptors form a chain consulted in registration order, the
+   * first match winning; each registration keeps its own trust policy.
    * @param channel - reserved shared channel; currently `/api`.
    * @param matches - synchronous endpoint ownership test.
    * @param handler - decoded endpoint handler returning the existing RPC result shape.

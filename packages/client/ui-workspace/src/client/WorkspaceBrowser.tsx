@@ -1202,6 +1202,10 @@ export function WorkspaceBrowser({
             ))}
       </div>
 
+      {/* The collab section renders beneath the browsing list (wide only):
+          an unoccupied hole keeps the region exactly as it is. */}
+      {wide && renderSlot('sidebar.workspaces.collab', { wide })}
+
       <Modal
         open={renameTarget !== null}
         onClose={closeRename}

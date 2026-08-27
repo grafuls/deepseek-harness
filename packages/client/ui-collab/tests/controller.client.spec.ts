@@ -4,15 +4,26 @@
  * user-facing error banner. Runs against a recording fake RPC through the
  * real CollabApi.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { CollabRpcResultError, CollabRpcResultOk } from '../src/client/contract.ts'
 import { CollabApi, type CollabRpcChannel, type CollabInvitationView, type CollabMemberView, type CollabWorkspaceView } from '../src/client/contract.ts'
-import { CollabWorkspacesController } from '../src/client/controller.ts'
+import { CollabWorkspacesController, type WorkspacePort } from '../src/client/controller.ts'
 import { createCollabWorkspacesStore } from '../src/client/store.ts'
 
 const WORKSPACE: CollabWorkspaceView = { id: 'w1', name: 'Alpha', memberCount: 2, isOwner: true, role: 'admin', createdAt: '2020-01-01T00:00:00.000Z' }
 const MEMBER: CollabMemberView = { userId: 'u1', email: 'owen@example.com', name: 'Owen', role: 'admin', joinedAt: '2020-01-01T00:00:00.000Z' }
 const INVITATION: CollabInvitationView = { id: 'i1', workspaceId: 'w1', email: 'lina@example.com', role: 'developer', createdBy: 'u1', createdAt: '2020-01-01T00:00:00.000Z', revoked: false }
+const MOUNTED = {
+  workspace: {
+    workspaceId: 'h1',
+    path: '/data/collab/workspaces/w1',
+    title: 'Alpha',
+    sessionIds: [] as string[],
+    createdAt: '2020-01-01T00:00:00.000Z',
+    updatedAt: '2020-01-01T00:00:00.000Z',
+  },
+  dir: '/data/collab/workspaces/w1',
+}
 
 function ok(value: unknown): CollabRpcResultOk<unknown> {
   return { ok: true, value }
@@ -23,10 +34,39 @@ function refusal(code: string): CollabRpcResultError {
 }
 
 /** One scripted call fake: each endpoint replays its response queue in order. */
-function harness(script: Record<string, Array<CollabRpcResultOk<unknown> | CollabRpcResultError>> = {}): {
+/** A controllable runtime Workspace port: an items list the test can mutate and a startSession spy. */
+function workspacePort(items: Array<{ workspaceId: string }> = []): {
+  port: WorkspacePort
+  list: Array<{ workspaceId: string }>
+  push: (workspaceId: string) => void
+  startSession: ReturnType<typeof vi.fn>
+} {
+  const list = items
+  const listeners = new Set<() => void>()
+  const push = (workspaceId: string): void => {
+    list.push({ workspaceId })
+    for (const listener of listeners) listener()
+  }
+  const startSession = vi.fn()
+  const port = {
+    list: {
+      getSnapshot: () => ({ items: list }),
+      subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } },
+    },
+    startSession,
+  }
+  return { port, list, push, startSession }
+}
+
+function harness(
+  script: Record<string, Array<CollabRpcResultOk<unknown> | CollabRpcResultError>> = {},
+  items: Array<{ workspaceId: string }> = [],
+): {
   store: ReturnType<typeof createCollabWorkspacesStore>
   controller: CollabWorkspacesController
   seen: string[]
+  push: (workspaceId: string) => void
+  startSession: ReturnType<typeof vi.fn>
 } {
   const seen: string[] = []
   const cursor = new Map<string, number>()
@@ -41,8 +81,9 @@ function harness(script: Record<string, Array<CollabRpcResultOk<unknown> | Colla
   }
   const api = new CollabApi(call)
   const store = createCollabWorkspacesStore()
-  const controller = new CollabWorkspacesController(api, store)
-  return { store, controller, seen }
+  const { port, push, startSession } = workspacePort(items)
+  const controller = new CollabWorkspacesController(api, store, port)
+  return { store, controller, seen, push, startSession }
 }
 
 /** Seed a selection so detail paths have a target (store is plain data). */
@@ -62,22 +103,82 @@ describe('CollabWorkspacesController', () => {
     expect(store.getSnapshot().error).toBeUndefined()
   })
 
+  it('opens the panel onto a workspace detail', async () => {
+    const { store, controller } = harness({
+      'collab/workspace.members': [ok([MEMBER])],
+      'collab/workspace.invitations': [ok([INVITATION])],
+    })
+    controller.openManager('w1')
+    expect(store.getSnapshot().open).toBe(true)
+    await vi.waitFor(() => { expect(store.getSnapshot().members).toEqual([MEMBER]) })
+    expect(store.getSnapshot().selectedId).toBe('w1')
+    expect(store.getSnapshot().invitations).toEqual([INVITATION])
+  })
+
+  it('mounts a collab workspace and switches the GUI into it', async () => {
+    const { store, controller, startSession } = harness(
+      { 'collab/workspace.open': [ok(MOUNTED)] },
+      [{ workspaceId: 'h1' }],
+    )
+    await expect(controller.openWorkspace('w1')).resolves.toBe(true)
+    expect(startSession).toHaveBeenCalledWith('h1')
+    expect(store.getSnapshot().working).toBe(false)
+    expect(store.getSnapshot().error).toBeUndefined()
+  })
+
+  it('switches in once the mounted workspace appears in the list echo', async () => {
+    const { controller, startSession, push } = harness({ 'collab/workspace.open': [ok(MOUNTED)] })
+    const opening = controller.openWorkspace('w1')
+    // Let the mount resolve and the bounded list wait install its listener,
+    // then announce unrelated echoes (falsy branch) before the matching one.
+    await new Promise((resolve) => { setTimeout(resolve, 0) })
+    push('other-ws')
+    push('h1')
+    await expect(opening).resolves.toBe(true)
+    expect(startSession).toHaveBeenCalledWith('h1')
+  })
+
+  it('still reports a mount when the list echo lags past the bound', async () => {
+    vi.useFakeTimers()
+    try {
+      const { controller, startSession } = harness({ 'collab/workspace.open': [ok(MOUNTED)] })
+      const opening = controller.openWorkspace('w1')
+      await vi.advanceTimersByTimeAsync(1600)
+      await expect(opening).resolves.toBe(true)
+      expect(startSession).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('folds an open failure into the banner', async () => {
+    const { store, controller, startSession } = harness({
+      'collab/workspace.open': [refusal('collab-forbidden')],
+    })
+    await expect(controller.openWorkspace('w1')).resolves.toBe(false)
+    expect(startSession).not.toHaveBeenCalled()
+    expect(store.getSnapshot().error).toBe('没有权限执行此操作')
+    expect(store.getSnapshot().working).toBe(false)
+  })
+
   it('probes ready and loads the workspace list', async () => {
     const { store, controller, seen } = harness({
       'collab/auth.status': [ok({ authenticated: true })],
       'collab/workspace.list': [ok([WORKSPACE])],
+      'collab/workspace.myInvitations': [ok([])],
     })
     await expect(controller.refreshAvailability()).resolves.toBe('ready')
     expect(store.getSnapshot().availability).toBe('ready')
     expect(store.getSnapshot().workspaces).toEqual([WORKSPACE])
-    expect(seen).toEqual(['collab/auth.status', 'collab/workspace.list'])
+    expect(store.getSnapshot().invitationsForMe).toEqual([])
+    expect(seen).toEqual(['collab/auth.status', 'collab/workspace.list', 'collab/workspace.myInvitations'])
   })
 
   it('probes hidden without touching the list', async () => {
     const { store, seen } = harness()
     const api = new CollabApi(async () => { throw new Error('transport failure') })
     const hiddenStore = createCollabWorkspacesStore()
-    const hidden = new CollabWorkspacesController(api, hiddenStore)
+    const hidden = new CollabWorkspacesController(api, hiddenStore, workspacePort().port)
     await expect(hidden.refreshAvailability()).resolves.toBe('hidden')
     expect(store.getSnapshot().availability).toBe('checking')
     expect(hiddenStore.getSnapshot().availability).toBe('hidden')
@@ -111,6 +212,7 @@ describe('CollabWorkspacesController', () => {
     const { store, controller } = harness({
       'collab/auth.status': [ok({ authenticated: true })],
       'collab/workspace.list': [ok([WORKSPACE]), ok([WORKSPACE])],
+      'collab/workspace.myInvitations': [ok([]), ok([])],
       'collab/workspace.members': [ok([MEMBER])],
       'collab/workspace.invitations': [ok([INVITATION])],
     })
@@ -127,6 +229,7 @@ describe('CollabWorkspacesController', () => {
     const { store, controller } = harness({
       'collab/auth.status': [ok({ authenticated: true })],
       'collab/workspace.list': [ok([WORKSPACE]), ok([])],
+      'collab/workspace.myInvitations': [ok([]), ok([])],
       'collab/workspace.members': [ok([MEMBER])],
       'collab/workspace.invitations': [ok([INVITATION])],
     })
@@ -138,6 +241,51 @@ describe('CollabWorkspacesController', () => {
     expect(after.selectedId).toBeUndefined()
     expect(after.members).toEqual([])
     expect(after.invitations).toEqual([])
+  })
+
+  it('loads the pending invitations addressed to the user into the store', async () => {
+    const mine = { id: 'i1', workspaceId: 'w1', workspaceName: 'Alpha', role: 'admin', createdAt: '2020-01-01T00:00:00.000Z' }
+    const { store, controller } = harness({
+      'collab/auth.status': [ok({ authenticated: true })],
+      'collab/workspace.list': [ok([])],
+      'collab/workspace.myInvitations': [ok([mine])],
+    })
+    await controller.refreshAvailability()
+    expect(store.getSnapshot().invitationsForMe).toEqual([mine])
+  })
+
+  it('accepts a pending invitation, joins, and opens the joined workspace', async () => {
+    const { store, controller, seen } = harness({
+      'collab/workspace.join': [ok(WORKSPACE)],
+      'collab/workspace.list': [ok([WORKSPACE])],
+      'collab/workspace.myInvitations': [ok([])],
+      'collab/workspace.members': [ok([MEMBER])],
+      'collab/workspace.invitations': [ok([INVITATION])],
+    })
+    await expect(controller.acceptInvitation('i1')).resolves.toEqual(WORKSPACE)
+    const after = store.getSnapshot()
+    expect(after.workspaces).toEqual([WORKSPACE])
+    expect(after.selectedId).toBe('w1')
+    expect(after.myRole).toBe('admin')
+    expect(after.members).toEqual([MEMBER])
+    expect(after.invitations).toEqual([INVITATION])
+    expect(after.working).toBe(false)
+    expect(after.invitationsForMe).toEqual([])
+    expect(seen).toEqual([
+      'collab/workspace.join',
+      'collab/workspace.list',
+      'collab/workspace.myInvitations',
+      'collab/workspace.members',
+      'collab/workspace.invitations',
+    ])
+  })
+
+  it('folds a join refusal for an acceptance into the general banner', async () => {
+    const { store, controller } = harness({ 'collab/workspace.join': [refusal('collab-forbidden')] })
+    await expect(controller.acceptInvitation('i1')).resolves.toBeUndefined()
+    const after = store.getSnapshot()
+    expect(after.error).toBe('没有权限执行此操作')
+    expect(after.working).toBe(false)
   })
 
   it('creates a workspace, trims its name, and selects it', async () => {
@@ -198,8 +346,12 @@ describe('CollabWorkspacesController', () => {
     expect(after.myRole).toBeUndefined()
     expect(after.members).toEqual([])
     // Deleting with no selection is a no-op.
-    expect(await new CollabWorkspacesController(new CollabApi(async () => ok({})), createCollabWorkspacesStore()).deleteSelected())
-      .toBe(false)
+    const noop = new CollabWorkspacesController(
+      new CollabApi(async () => ok({})),
+      createCollabWorkspacesStore(),
+      workspacePort().port,
+    )
+    expect(await noop.deleteSelected()).toBe(false)
   })
 
   it('a no-target mutation is a safe no-op', async () => {
@@ -282,7 +434,7 @@ describe('CollabWorkspacesController', () => {
     const api = new CollabApi(async () => { throw new Error('network down') })
     const failingStore = createCollabWorkspacesStore()
     failingStore.set({ ...selected().getSnapshot() })
-    const failing = new CollabWorkspacesController(api, failingStore)
+    const failing = new CollabWorkspacesController(api, failingStore, workspacePort().port)
     await failing.removeMember('u1')
     expect(failingStore.getSnapshot().error).toBe('连接服务失败，请重试')
     expect(failingStore.getSnapshot().working).toBe(false)

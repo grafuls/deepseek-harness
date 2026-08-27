@@ -34,4 +34,4 @@ The package contributes nothing to model requests, so it cannot invalidate cache
 
 - **登录后不做连接级恢复** —— OIDC 往返是一次整页导航，因此门后的应用带着新 Cookie 重新加载，而非热重连 `/api` 传输。对已 401 连接的实时恢复留待后续。
 - **UI 只 fail-open，不做强制** —— 本插件只呈现会话判定；它绝不宣称授权或拒绝请求。collab 实例必须保持 collab API 网关（它自己的 401 围栏）挂载。
-- **门只读当前语言文案** —— 覆盖层目前只带中文产品文案；卡片的英文语言包留待后续。
+- **文案跟随当前应用语言** —— 门将其 `collab.auth` 词典（中文 + 英文）注册到标准 locale seat 上，卡片语言跟随 GUI 的语言设置，而非写死的字符串。

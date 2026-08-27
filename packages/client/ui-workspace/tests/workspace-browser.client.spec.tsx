@@ -96,6 +96,17 @@ function rerender(b: ReturnType<typeof mount>, overrides: Partial<WorkspaceBrows
 }
 
 describe('WorkspaceBrowser', () => {
+  it('renders the collab hole beneath the browsing list while wide and only then', () => {
+    const b = mount({
+      renderSlot: ((name: string, _owner: unknown) =>
+        name === 'sidebar.workspaces.collab' ? <div data-testid="collab-section" /> : null) as never,
+    })
+    expect(screen.getByTestId('collab-section')).toBeTruthy()
+    // The rail keeps the region exactly as it was: no section outlet.
+    rerender(b, { wide: false })
+    expect(screen.queryByTestId('collab-section')).toBeNull()
+  })
+
   it('workspace hover card shows a POSIX home descendant as ~', () => {
     vi.useFakeTimers()
     try {

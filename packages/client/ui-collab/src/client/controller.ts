@@ -23,6 +23,17 @@ function foldWireError(error: unknown): string {
   return '连接服务失败，请重试'
 }
 
+/** The runtime Workspace face the opener switches into a mounted collab workspace. */
+export interface WorkspacePort {
+  /** The live Host Workspace list snapshot store (client projection). */
+  list: {
+    getSnapshot(): { items: readonly { workspaceId: string }[] }
+    subscribe(listener: () => void): () => void
+  }
+  /** The shared New Session action: connect the target Workspace and open it. */
+  startSession(workspaceId?: string): void
+}
+
 /**
  * Drives the collab workspaces store: every async transition funnels through
  * this owner so the store stays a plain snapshot source and the RPC surface
@@ -33,10 +44,13 @@ export class CollabWorkspacesController {
    * Create the controller.
    * @param api - the collab RPC surface.
    * @param store - the shared workspaces snapshot store.
+   * @param workspaces - the runtime Workspace face, used to switch the GUI
+   *   into a mounted collab workspace.
    */
   constructor(
     private readonly api: CollabApi,
     private readonly store: SnapshotStore<CollabWorkspacesState>,
+    private readonly workspaces: WorkspacePort,
   ) {}
 
   /**
@@ -45,6 +59,74 @@ export class CollabWorkspacesController {
    */
   openPanel(): void {
     this.store.set({ ...this.store.getSnapshot(), open: true })
+  }
+
+  /**
+   * Open the panel onto one workspace's detail.
+   * @param workspaceId - the workspace to load into the manager.
+   */
+  openManager(workspaceId: string): void {
+    this.openPanel()
+    void this.select(workspaceId)
+  }
+
+  /**
+   * Mount a collab workspace as a real Host workspace and, once the runtime's
+   * Workspace list reflects it, switch the GUI into it (open a Session in
+   * that workspace). The mount is member-gated and path-stable, so every
+   * member opens the same Host workspace; sessions born inside it are shared
+   * and scoped to the collab data directory. A late list echo skips only the
+   * navigation, never the mount.
+   * @param workspaceId - the collab workspace to open.
+   * @returns whether the workspace mounted (navigation is best-effort).
+   */
+  async openWorkspace(workspaceId: string): Promise<boolean> {
+    this.store.set({ ...this.store.getSnapshot(), working: true, error: undefined })
+    try {
+      const mounted = await this.api.open(workspaceId)
+      if (await this.awaitWorkspaceListed(mounted.workspace.workspaceId)) {
+        this.workspaces.startSession(mounted.workspace.workspaceId)
+      }
+      this.store.set({ ...this.store.getSnapshot(), working: false })
+      return true
+    } catch (error) {
+      this.store.set({ ...this.store.getSnapshot(), working: false, error: foldWireError(error) })
+      return false
+    }
+  }
+
+  /**
+   * Wait (bounded) for the runtime's Host Workspace list to include the
+   * mounted workspace id, so the switch navigates into a listing the GUI
+   * already knows. Single-threaded settle: the success path clears the timer
+   * and removes the listener, the timeout path removes the listener, so
+   * `finish` runs exactly once per wait.
+   * @param hostWorkspaceId - the Host workspace id just mounted.
+   * @returns true when the workspace appeared within the bound.
+   */
+  private awaitWorkspaceListed(
+    hostWorkspaceId: string,
+    timeoutMs = 1500,
+  ): Promise<boolean> {
+    const list = this.workspaces.list
+    if (list.getSnapshot().items.some(item => item.workspaceId === hostWorkspaceId)) {
+      return Promise.resolve(true)
+    }
+    return new Promise((resolve) => {
+      // `finish` runs only after both `timer` and `dispose` exist: the timer is
+      // 1500ms out and the listener body runs on a later notify.
+      const finish = (value: boolean): void => {
+        clearTimeout(timer)
+        dispose()
+        resolve(value)
+      }
+      const timer = setTimeout(() => { finish(false) }, timeoutMs)
+      const dispose = list.subscribe(() => {
+        if (list.getSnapshot().items.some(item => item.workspaceId === hostWorkspaceId)) {
+          finish(true)
+        }
+      })
+    })
   }
 
   /**
@@ -72,12 +154,16 @@ export class CollabWorkspacesController {
   }
 
   /**
-   * Reload the member workspace list, keeping a still-present selection's
-   * detail when one is selected.
+   * Reload the member workspace list and the invitations addressed to this
+   * browser's user, keeping a still-present selection's detail when one is
+   * selected.
    * @returns the loaded workspace list.
    */
   async refresh(): Promise<CollabWorkspacesState['workspaces']> {
-    const workspaces = await this.api.listWorkspaces()
+    const [workspaces, invitationsForMe] = await Promise.all([
+      this.api.listWorkspaces(),
+      this.api.myInvitations(),
+    ])
     const current = this.store.getSnapshot()
     const selectedId = current.selectedId !== undefined
       && workspaces.some(workspace => workspace.id === current.selectedId)
@@ -86,6 +172,7 @@ export class CollabWorkspacesController {
     this.store.set({
       ...current,
       workspaces,
+      invitationsForMe,
       selectedId,
       myRole: selectedId === undefined
         ? undefined
@@ -94,6 +181,25 @@ export class CollabWorkspacesController {
       invitations: selectedId === current.selectedId ? current.invitations : [],
     })
     return workspaces
+  }
+
+  /**
+   * Accept a pending invitation addressed to this browser's user, then reload
+   * the list and open the joined workspace's detail.
+   * @param invitationId - the invitation to consume.
+   * @returns the joined workspace view, or undefined on failure.
+   */
+  async acceptInvitation(invitationId: string): Promise<CollabWorkspacesState['workspaces'][number] | undefined> {
+    this.store.set({ ...this.store.getSnapshot(), working: true, error: undefined })
+    try {
+      const joined = await this.api.join(invitationId)
+      await this.refresh()
+      await this.select(joined.id)
+      return joined
+    } catch (error) {
+      this.store.set({ ...this.store.getSnapshot(), working: false, error: foldWireError(error) })
+      return undefined
+    }
   }
 
   /**

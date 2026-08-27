@@ -193,6 +193,34 @@ describe('invitations and join', () => {
     await expect(ctx.collabWorkspaces.join('member', 'bob' as UserId, 'bob@example.com', secondInvite.id))
       .rejects.toThrow(/already a member/)
   })
+
+  it('lists the pending invitations addressed to an email, with the workspace name', async () => {
+    const { ctx } = await harness()
+    const alice = await user(ctx, 'sub-alice', 'alice@example.com', 'Alice')
+    const bob = await user(ctx, 'sub-bob', 'bob@example.com', 'Bob')
+    const platform = await ctx.collabWorkspaces.create(alice.globalRole, alice.id, 'Platform')
+    const docs = await ctx.collabWorkspaces.create(alice.globalRole, alice.id, 'Docs')
+    const platformInvite = await ctx.collabWorkspaces.invite('admin', platform.id, alice.id, '  Bob@Example.com ', 'developer')
+    const adminInvite = await ctx.collabWorkspaces.invite('admin', docs.id, alice.id, 'bob@example.com', 'admin')
+
+    // The acting email is normalized, so any casing/spacing resolves the same invites.
+    const forBob = ctx.collabWorkspaces.listPendingForEmail('bob@example.com')
+    const byId = new Map(forBob.map(entry => [entry.invitation.id, entry]))
+    expect(byId.size).toBe(2)
+    expect(byId.get(adminInvite.id)).toMatchObject({ workspaceName: 'Docs', invitation: { role: 'admin' } })
+    expect(byId.get(platformInvite.id)).toMatchObject({ workspaceName: 'Platform', invitation: { role: 'developer' } })
+
+    // A consumed invitation, a revoked one, and another recipient's invite are absent.
+    await ctx.collabWorkspaces.join(bob.globalRole, bob.id, 'bob@example.com', adminInvite.id)
+    await ctx.collabWorkspaces.revokeInvitation('admin', platform.id, platformInvite.id)
+    await ctx.collabWorkspaces.invite('admin', docs.id, alice.id, 'carol@example.com')
+    expect(ctx.collabWorkspaces.listPendingForEmail('bob@example.com')).toEqual([])
+
+    // Deleting a workspace cleans up its pending invitations in the same pass.
+    await ctx.collabWorkspaces.invite('admin', platform.id, alice.id, 'bob@example.com', 'developer')
+    await ctx.collabWorkspaces.delete('admin', platform.id)
+    expect(ctx.collabWorkspaces.listPendingForEmail('bob@example.com')).toEqual([])
+  })
 })
 
 describe('membership administration', () => {

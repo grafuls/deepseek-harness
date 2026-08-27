@@ -7,7 +7,14 @@
  */
 
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
-import type { CollabAvailability, CollabInvitationView, CollabMemberView, CollabRole, CollabWorkspaceView } from './contract.ts'
+import type {
+  CollabAvailability,
+  CollabInvitationView,
+  CollabMemberView,
+  CollabMyInvitationView,
+  CollabRole,
+  CollabWorkspaceView,
+} from './contract.ts'
 
 /** The workspaces manager's serializable snapshot. */
 export interface CollabWorkspacesState {
@@ -17,6 +24,8 @@ export interface CollabWorkspacesState {
   availability: CollabAvailability
   /** The signed-in member's workspace list. */
   workspaces: CollabWorkspaceView[]
+  /** Pending invitations addressed to the signed-in user (the accept surface). */
+  invitationsForMe: CollabMyInvitationView[]
   /** The selected workspace id, absent before a selection. */
   selectedId: string | undefined
   /** The signed-in user's role in the selected workspace (admin actions gate on it). */
@@ -36,6 +45,7 @@ export const COLLAB_WORKSPACES_INITIAL: CollabWorkspacesState = {
   open: false,
   availability: 'checking',
   workspaces: [],
+  invitationsForMe: [],
   selectedId: undefined,
   myRole: undefined,
   members: [],

@@ -562,7 +562,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     ],
     replaceRisk: 'shadows-shipped-ui',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.hero.workspace.directoryFlow\', () => ctx.slots.register(\n      { name: \'conversation.hero.workspace.directoryFlow\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-workspace/src/client/contract/slots.ts:57',
+    source: 'packages/client/ui-workspace/src/client/contract/slots.ts:67',
   },
   {
     key: 'conversation.input.attachments',
@@ -1708,7 +1708,6 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     slotInject: '',
     declaredBy: 'an entry in \'sidebar\' (client-ui-sidebar), so it exists while that entry is mounted',
     occupants: [
-      'client-ui-collab WorkspacesTrigger id \'collab-workspaces-trigger\'',
       'client-ui-cordis CordisPanel id \'cordis-panel\'',
     ],
     replaceRisk: 'none',
@@ -1768,6 +1767,32 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     source: 'packages/client/ui-sidebar/src/client/contract/slots.ts:35',
   },
   {
+    key: 'sidebar.workspaces.collab',
+    kind: 'single',
+    scope: 'root',
+    summary: 'Collaborative-workspaces section under the sidebar browsing region (declared by the WorkspaceBrowser entry).',
+    doc: 'Collaborative-workspaces section under the sidebar browsing region (declared by the WorkspaceBrowser entry).',
+    registerOptions: [],
+    ownerProps: [
+      '/**\n * Owner share of the collab section hole under the browsing region: the\n * column display state, so the occupant can collapse to a rail\n * representation (the owner already gates the outlet to wide columns).\n */\nexport interface SidebarCollabOwnerProps {\n  /** Whether the sidebar renders wide content (false = 56px rail). */\n  wide: boolean\n}',
+    ],
+    ownerPropsReferences: [],
+    standardProps: [
+      'useSessions: SnapshotSelectorHook<SessionListState>',
+      'useWorkspaces: SnapshotSelectorHook<import(\'./workspaces/service.ts\').WorkspaceListState>',
+    ],
+    keyDomain: '',
+    hookContext: '',
+    slotInject: '',
+    declaredBy: 'an entry in \'sidebar.workspaces\' (client-ui-workspace), so it exists while that entry is mounted',
+    occupants: [
+      'client-ui-collab CollabSection',
+    ],
+    replaceRisk: 'shadows-shipped-ui',
+    example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'sidebar.workspaces.collab\', () => ctx.slots.register(\n      { name: \'sidebar.workspaces.collab\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
+    source: 'packages/client/ui-workspace/src/client/contract/slots.ts:71',
+  },
+  {
     key: 'sidebar.workspaces.directoryFlow',
     kind: 'single',
     scope: 'root',
@@ -1792,7 +1817,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     ],
     replaceRisk: 'shadows-shipped-ui',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'sidebar.workspaces.directoryFlow\', () => ctx.slots.register(\n      { name: \'sidebar.workspaces.directoryFlow\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-workspace/src/client/contract/slots.ts:59',
+    source: 'packages/client/ui-workspace/src/client/contract/slots.ts:69',
   },
   {
     key: 'tool.call.toolview',

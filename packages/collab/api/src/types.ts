@@ -59,6 +59,15 @@ export interface CollabInvitationView {
   usedAt?: string
 }
 
+/** Client-safe pending invitation addressed to the caller (the accept surface). */
+export interface CollabInvitationForMeView {
+  id: string
+  workspaceId: string
+  workspaceName: string
+  role: WorkspaceRole
+  createdAt: string
+}
+
 /** Client-safe account row for the admin surface. */
 export interface CollabUserView {
   id: string
@@ -72,5 +81,26 @@ export interface CollabUserView {
 /** Per-workspace data directory resolution. */
 export interface CollabWorkspaceDirView {
   /** Absolute data directory reserved for the workspace. */
+  dir: string
+}
+
+/** A collab workspace mounted as a real Host workspace over its data directory. */
+export interface CollabMountedWorkspaceView {
+  /** The Host workspace the collab workspace resolves to (path-stable: every member mounts the same one). */
+  workspace: {
+    /** Host workspace id (branded string on the wire). */
+    workspaceId: string
+    /** Canonical data directory of the collab workspace. */
+    path: string
+    /** Display title (the collab workspace name). */
+    title: string
+    /** Sessions accounted under this workspace, in manually owned order. */
+    sessionIds: string[]
+    /** Creation instant of the Host workspace record (ISO 8601). */
+    createdAt: string
+    /** Last-mutation instant of the Host workspace record (ISO 8601). */
+    updatedAt: string
+  }
+  /** The collab workspace's reserved data directory (equals `workspace.path`). */
   dir: string
 }

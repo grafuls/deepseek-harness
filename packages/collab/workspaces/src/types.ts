@@ -63,3 +63,14 @@ export interface WorkspaceSummary {
   role: WorkspaceRole
   createdAt: string
 }
+
+/**
+ * One pending invitation's accept-surface facts for the addressed user: the
+ * invitation plus the target workspace's display name.
+ */
+export interface WorkspaceInvitationForEmail {
+  /** The pending invitation. */
+  invitation: WorkspaceInvitation
+  /** The target workspace's display name. */
+  workspaceName: string
+}

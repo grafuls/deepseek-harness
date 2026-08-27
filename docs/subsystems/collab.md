@@ -16,7 +16,7 @@ When the collab bundle is mounted, [dsh-collab-auth](../../packages/collab/auth)
 
 ## Wire surface
 
-The collab API owns the `collab/*` JSON-RPC endpoints served under `/api` over the shared connection envelope — `workspace.list/get/create/members/dir/invite/invitations/revokeInvitation/join/leave/delete/setMemberRole/removeMember`, the `users.*` admin surface, and the `collab/auth.status` probe. The browser [ui-auth client gate](../../packages/client/ui-auth) blocks the app behind a sign-in page until a cookie authorizes it, and the [ui-collab workspaces manager](../../packages/client/ui-collab) lists, creates, invites to, and administers workspaces over the same RPC from the shell's sidebar foot action.
+The collab API owns the `collab/*` JSON-RPC endpoints served under `/api` over the shared connection envelope — `workspace.list/get/create/members/dir/invite/invitations/myInvitations/revokeInvitation/join/leave/delete/setMemberRole/removeMember/open`, the `users.*` admin surface, and the `collab/auth.status` probe. The browser [ui-auth client gate](../../packages/client/ui-auth) blocks the app behind a sign-in page until a cookie authorizes it, and the [ui-collab workspaces manager](../../packages/client/ui-collab) lists, creates, accepts invitations addressed to the user, and administers workspaces over the same RPC from the collab section under the sidebar's Workspaces list (a row opens the manager overlay for member and role detail). A member's Open mounts the collab workspace through `collab/workspace.open` as a real Host workspace over its reserved `workspaces/<id>` directory and switches the GUI into it via the runtime Workspace face; the Host registry resolves the same workspace for every member, so sessions born inside it share that directory.
 
 ## Known limitations
 
@@ -245,6 +245,16 @@ async invite( actorWorkspaceRole: WorkspaceRole, workspaceId: WorkspaceId, actor
  * @returns every invitation for the workspace, pending or otherwise.
  */
 async listInvitations(actorWorkspaceRole: WorkspaceRole, workspaceId: WorkspaceId): Promise<WorkspaceInvitation[]>
+
+/**
+ * Every pending invitation addressed to an email (the acting user's own),
+ * each with the target workspace's name for the accept surface. A self
+ * query, so it takes no role: `delete` already removes a workspace's
+ * invitations, so a pending invitation always resolves a live workspace.
+ * @param email - the acting user's verified email.
+ * @returns the pending-invitation accept facts for the addressed user.
+ */
+listPendingForEmail(email: string): WorkspaceInvitationForEmail[]
 
 /**
  * Revoke a pending invitation (idempotent).

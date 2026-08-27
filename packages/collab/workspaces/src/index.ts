@@ -28,6 +28,7 @@ import type {
   InvitationId as InvitationIdBrand,
   WorkspaceId as WorkspaceIdBrand,
   WorkspaceInvitation,
+  WorkspaceInvitationForEmail,
   WorkspaceMember,
   WorkspaceRecord,
   WorkspaceSummary,
@@ -35,7 +36,13 @@ import type {
 
 /** Identifies one collab workspace. */
 export type WorkspaceId = WorkspaceIdBrand
-export type { WorkspaceInvitation, WorkspaceMember, WorkspaceRecord, WorkspaceSummary } from './types.ts'
+export type {
+  WorkspaceInvitation,
+  WorkspaceInvitationForEmail,
+  WorkspaceMember,
+  WorkspaceRecord,
+  WorkspaceSummary,
+} from './types.ts'
 /** Identifies one invitation into a workspace. */
 export type InvitationId = InvitationIdBrand
 
@@ -336,6 +343,24 @@ export class CollabWorkspaces extends Service {
       this.requireWorkspace(workspaceId)
       return [...this.invitations.values()].filter(invitation => invitation.workspaceId === workspaceId)
     })
+  }
+
+  /**
+   * Every pending invitation addressed to an email (the acting user's own),
+   * each with the target workspace's name for the accept surface. A self
+   * query, so it takes no role: `delete` already removes a workspace's
+   * invitations, so a pending invitation always resolves a live workspace.
+   * @param email - the acting user's verified email.
+   * @returns the pending-invitation accept facts for the addressed user.
+   */
+  listPendingForEmail(email: string): WorkspaceInvitationForEmail[] {
+    const normalized = normalizeEmail(email)
+    return [...this.invitations.values()]
+      .filter(invitation => invitation.email === normalized && !invitation.revoked && invitation.usedAt === undefined)
+      .map((invitation) => {
+        const record = this.requireWorkspace(invitation.workspaceId)
+        return { invitation, workspaceName: record.name }
+      })
   }
 
   /**

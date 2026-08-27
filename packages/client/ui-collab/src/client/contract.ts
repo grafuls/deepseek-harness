@@ -80,8 +80,43 @@ export interface CollabInvitationView {
   usedAt?: string
 }
 
+/** A pending invitation addressed to the signed-in user, for the accept surface. */
+export interface CollabMyInvitationView {
+  /** Opaque branded invitation id (string on the wire). */
+  id: string
+  /** The inviting workspace. */
+  workspaceId: string
+  /** The inviting workspace's display name. */
+  workspaceName: string
+  /** The role accepting grants. */
+  role: CollabRole
+  /** Invitation creation timestamp (ISO 8601). */
+  createdAt: string
+}
+
 /** The workspaces overlay's availability verdict for the collab surface. */
 export type CollabAvailability = 'checking' | 'ready' | 'hidden'
+
+/** A collab workspace mounted as a real Host workspace over its data directory. */
+export interface CollabMountedWorkspaceView {
+  /** The Host workspace the collab workspace resolves to (path-stable: every member mounts the same one). */
+  workspace: {
+    /** Host workspace id (string on the wire). */
+    workspaceId: string
+    /** Canonical data directory of the collab workspace. */
+    path: string
+    /** Display title (the collab workspace name). */
+    title: string
+    /** Sessions accounted under this workspace, in manually owned order. */
+    sessionIds: string[]
+    /** Host record creation instant (ISO 8601). */
+    createdAt: string
+    /** Host record last-mutation instant (ISO 8601). */
+    updatedAt: string
+  }
+  /** The collab workspace's reserved data directory (equals `workspace.path`). */
+  dir: string
+}
 
 /** Verification that a collab RPC failed, carrying the gateway's wire code. */
 export class CollabError extends Error {
@@ -192,6 +227,36 @@ export class CollabApi {
    */
   invitations(workspaceId: string): Promise<CollabInvitationView[]> {
     return this.request('collab/workspace.invitations', { workspaceId })
+  }
+
+  /**
+   * List the pending invitations addressed to this browser's signed-in user.
+   * @returns the accept-surface invitations for this user.
+   */
+  myInvitations(): Promise<CollabMyInvitationView[]> {
+    return this.request('collab/workspace.myInvitations', {})
+  }
+
+  /**
+   * Accept a pending invitation addressed to this browser's user and join its
+   * workspace. The server matches the invitation to the caller's verified
+   * email before joining.
+   * @param invitationId - the invitation to consume.
+   * @returns the joined workspace view.
+   */
+  join(invitationId: string): Promise<CollabWorkspaceView> {
+    return this.request('collab/workspace.join', { invitationId })
+  }
+
+  /**
+   * Mount a collab workspace as a real Host workspace over its reserved data
+   * directory (member-gated). The Host registry resolves the same workspace
+   * for every member, so sessions born inside it are shared.
+   * @param workspaceId - the collab workspace to open.
+   * @returns the mounted Host workspace plus the scoped data directory.
+   */
+  open(workspaceId: string): Promise<CollabMountedWorkspaceView> {
+    return this.request('collab/workspace.open', { workspaceId })
   }
 
   /**

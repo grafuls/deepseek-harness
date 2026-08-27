@@ -31,17 +31,19 @@ The `collab/*` endpoints ride the shared `/api` channel with the standard JSON-R
 | `collab/workspace.dir` | the per-workspace data directory under the collab root, materialized on demand |
 | `collab/workspace.invite` | invite by email to a role (`admin`/`developer`); workspace-admin only |
 | `collab/workspace.invitations` | outstanding invitations; workspace-admin only |
+| `collab/workspace.myInvitations` | pending invitations addressed to the caller's email, with the target workspace names |
 | `collab/workspace.revokeInvitation` | revoke an invitation; workspace-admin only |
 | `collab/workspace.join` | accept an invitation addressed to the caller |
 | `collab/workspace.leave` | leave a workspace (the owner must delete instead) |
 | `collab/workspace.delete` | delete a workspace; workspace-owner only |
 | `collab/workspace.setMemberRole` | change a member's role; workspace-admin only |
 | `collab/workspace.removeMember` | remove a member; workspace-admin only |
+| `collab/workspace.open` | mount a collab workspace as a real Host workspace over its reserved data directory (a member may open it); the Host registry resolves the same workspace for every member |
 | `collab/users.list` | account roster; instance-admin only |
 | `collab/users.setGlobalRole` | promote/demote an account (`admin`/`member`); instance-admin only |
 | `collab/users.setDisabled` | disable/enable an account; instance-admin only |
 
-Errors fold to a closed `RpcError` code set: `collab-forbidden` for authorization denials (service RBAC), `collab-not-found` for unknown workspaces, and `collab-bad-request` for malformed wire fields or other service failures. Every endpoint is validated at the wire boundary, then delegated to the owning service, which owns persistence and RBAC.
+Errors fold to a closed `RpcError` code set: `collab-forbidden` for authorization denials (service RBAC), `collab-not-found` for unknown workspaces, `collab-bad-request` for malformed wire fields or other service failures, `collab-internal` for a missing host service (the workspace registry is absent from the composition), and `collab-name-conflict` when re-asserting a collab name that collides with another Host workspace title. Every endpoint is validated at the wire boundary, then delegated to the owning service, which owns persistence and RBAC.
 
 ## Configuration
 
@@ -79,5 +81,5 @@ The package contributes nothing to model requests, so it cannot invalidate cache
 
 - **Auth routes bypass the JSON-RPC fence on localhost** — the login, callback, session, and logout exact routes answer before the `/api` prefix route, so they do not carry the trust-fence or envelope checks. This is acceptable for an OIDC flow over a loopback development bind; a non-loopback deployment must front the process with TLS and keep `baseUrl`/`redirectUri` on the public host the IdP redirects to.
 - **Callback path must match `collabAuth.redirectUri`** — the callback route is derived from the redirect URI's pathname, so an inconsistent `redirectUri` breaks sign-in rather than silently mis-directing it.
-- **Live session plane is shared, not per-workspace** — authentication and active sessions live in the process plane; the per-workspace persistence boundary is the `$DSH_HOME/.../collab/workspaces/<wsId>` data directory. Workspace-scoped session or context isolation is deferred.
+- **One process session plane, per-workspace session binding** — authentication and active sessions live in the process plane (the browser holds one session cookie), so a collab workspace hosts no login of its own; opening a workspace mounts it as a real Host workspace, and the sessions a member starts inside it are bound to the shared `$DSH_HOME/.../collab/workspaces/<wsId>` data directory.
 - **`loader.await()` does not imply the collab surface is ready** — dependent activation settles a tick after the tree reports loaded, so a readiness consumer should probe `/api/collab/auth/session` before issuing requests (the real-composition test does exactly this).

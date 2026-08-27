@@ -9,8 +9,8 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CollabInvitationView, CollabMemberView, CollabWorkspaceView } from '../src/client/contract.ts'
-import { WorkspacesPanel, type CollabWorkspacesActions } from '../src/client/WorkspacesPanel.tsx'
-import { WorkspacesTrigger } from '../src/client/WorkspacesTrigger.tsx'
+import { en } from '../src/client/locales.ts'
+import { WorkspacesPanel, type CollabWorkspacesActions, type WorkspacesPanelProps } from '../src/client/WorkspacesPanel.tsx'
 import type { CollabWorkspacesState } from '../src/client/store.ts'
 
 afterEach(() => {
@@ -27,18 +27,28 @@ function actions(): CollabWorkspacesActions {
     closePanel: vi.fn(),
     refresh: vi.fn(),
     select: vi.fn(),
+    openManager: vi.fn(),
+    openWorkspace: vi.fn(),
     create: vi.fn(),
     invite: vi.fn(),
     revokeInvitation: vi.fn(),
+    acceptInvitation: vi.fn(),
     setMemberRole: vi.fn(),
     removeMember: vi.fn(),
     deleteSelected: vi.fn(),
   }
 }
 
+/** An English-bound translate seat for direct rendering (the renderer binds it in production). */
+const t: WorkspacesPanelProps['t'] = (key, params) => {
+  const template = (en as Record<string, string>)[key] ?? key
+  return params === undefined ? template
+    : template.replace(/\{(\w+)\}/g, (match, name: string) => (name in params ? String(params[name]) : match))
+}
+
 function panel(state: CollabWorkspacesState, actionsOverrides: Partial<CollabWorkspacesActions> = {}) {
   const injected = actions()
-  return render(<WorkspacesPanel useCollabWorkspaces={sel => sel(state)} actions={{ ...injected, ...actionsOverrides }} />)
+  return render(<WorkspacesPanel useCollabWorkspaces={sel => sel(state)} actions={{ ...injected, ...actionsOverrides }} t={t} />)
 }
 
 function readyState(overrides: Partial<CollabWorkspacesState> = {}): CollabWorkspacesState {
@@ -46,6 +56,7 @@ function readyState(overrides: Partial<CollabWorkspacesState> = {}): CollabWorks
     open: true,
     availability: 'ready',
     workspaces: [WORKSPACE],
+    invitationsForMe: [],
     selectedId: undefined,
     myRole: undefined,
     members: [],
@@ -70,15 +81,23 @@ describe('WorkspacesPanel', () => {
   it('lists the member workspaces with their role and member count', () => {
     panel(readyState())
     expect(screen.getByRole('dialog')).toBeTruthy()
-    expect(screen.getByText('协作工作区')).toBeTruthy()
+    expect(screen.getByText('Collaborative workspaces')).toBeTruthy()
     expect(screen.getByText('Alpha')).toBeTruthy()
-    expect(screen.getByText('管理员')).toBeTruthy()
-    expect(screen.getByText('2 名成员')).toBeTruthy()
+    expect(screen.getByText('Admin')).toBeTruthy()
+    expect(screen.getByText('2 members')).toBeTruthy()
   })
 
-  it('shows the empty state when the member has no workspaces', () => {
-    panel(readyState({ workspaces: [] }))
-    expect(screen.getByText('还没有工作区')).toBeTruthy()
+  it('shows the empty state with a working create affordance', () => {
+    const create = vi.fn()
+    panel(readyState({ workspaces: [] }), { create })
+    expect(screen.getByText('No workspaces yet')).toBeTruthy()
+    // A fresh member can still start their first workspace from the empty state.
+    fireEvent.click(screen.getByText('＋ New workspace'))
+    const input = screen.getByPlaceholderText('Workspace name')
+    fireEvent.change(input, { target: { value: 'Beta' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    expect(create).toHaveBeenCalledWith('Beta')
+    expect(screen.getByText('No workspaces yet')).toBeTruthy()
   })
 
   it('selects a workspace row and closes through the header', () => {
@@ -87,19 +106,19 @@ describe('WorkspacesPanel', () => {
     panel(readyState(), { select, closePanel })
     fireEvent.click(screen.getByText('Alpha'))
     expect(select).toHaveBeenCalledWith('w1')
-    fireEvent.click(screen.getByRole('button', { name: '关闭' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     expect(closePanel).toHaveBeenCalledTimes(1)
   })
 
   it('creates a workspace from the inline form and clears the demo input', () => {
     const create = vi.fn()
     panel(readyState(), { create })
-    fireEvent.click(screen.getByText('＋ 新建工作区'))
-    const input = screen.getByPlaceholderText('工作区名称')
+    fireEvent.click(screen.getByText('＋ New workspace'))
+    const input = screen.getByPlaceholderText('Workspace name')
     fireEvent.change(input, { target: { value: 'Beta' } })
-    fireEvent.click(screen.getByRole('button', { name: '创建' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
     expect(create).toHaveBeenCalledWith('Beta')
-    expect(screen.getByText('＋ 新建工作区')).toBeTruthy()
+    expect(screen.getByText('＋ New workspace')).toBeTruthy()
   })
 
   it('shows the workspace detail with invitations and invite form for an admin', () => {
@@ -110,14 +129,14 @@ describe('WorkspacesPanel', () => {
       members: [MEMBER],
       invitations: [INVITATION],
     }), { invite })
-    expect(screen.getByText('成员')).toBeTruthy()
+    expect(screen.getByText('Members')).toBeTruthy()
     expect(screen.getByText('Owen')).toBeTruthy()
     expect(screen.getByText('lina@example.com')).toBeTruthy()
-    fireEvent.click(screen.getByText('＋ 邀请成员'))
+    fireEvent.click(screen.getByText('＋ Invite member'))
     const inviteRow = screen.getByPlaceholderText('name@example.com')
     fireEvent.change(inviteRow, { target: { value: 'carol@example.com' } })
     // The invite select defaults to developer.
-    fireEvent.click(screen.getByRole('button', { name: '邀请' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Invite' }))
     expect(invite).toHaveBeenCalledWith('carol@example.com', 'developer')
   })
 
@@ -133,13 +152,13 @@ describe('WorkspacesPanel', () => {
       invitations: [INVITATION],
     }), { setMemberRole, revokeInvitation, removeMember, deleteSelected })
     // MEMBER is already admin, so the row offers the demote action.
-    fireEvent.click(screen.getByRole('button', { name: '设为开发者' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Make developer' }))
     expect(setMemberRole).toHaveBeenCalledWith('u1', 'developer')
-    fireEvent.click(screen.getByRole('button', { name: '撤销' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke' }))
     expect(revokeInvitation).toHaveBeenCalledWith('i1')
-    fireEvent.click(screen.getByRole('button', { name: '移除' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
     expect(removeMember).toHaveBeenCalledWith('u1')
-    fireEvent.click(screen.getByRole('button', { name: '删除工作区' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete workspace' }))
     expect(deleteSelected).toHaveBeenCalled()
   })
 
@@ -150,16 +169,35 @@ describe('WorkspacesPanel', () => {
       members: [MEMBER],
       invitations: [INVITATION],
     }))
-    expect(screen.queryByRole('button', { name: '＋ 邀请成员' })).toBeNull()
-    expect(screen.queryByRole('button', { name: '移除' })).toBeNull()
-    expect(screen.queryByRole('button', { name: '删除工作区' })).toBeNull()
-    expect(screen.getByText('成员')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '＋ Invite member' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Delete workspace' })).toBeNull()
+    expect(screen.getByText('Members')).toBeTruthy()
   })
 
   it('surfaces the error banner and clears it on close', () => {
     const closePanel = vi.fn()
     panel(readyState({ error: '请求无效，请检查输入' }), { closePanel })
     expect(screen.getByText('请求无效，请检查输入')).toBeTruthy()
+  })
+
+  it('lists the pending invitations for the user with their role and accepts one', () => {
+    const acceptInvitation = vi.fn()
+    panel(readyState({
+      invitationsForMe: [
+        { id: 'i1', workspaceId: 'w1', workspaceName: 'Alpha', role: 'admin', createdAt: '2020-01-01T00:00:00.000Z' },
+        { id: 'i2', workspaceId: 'w2', workspaceName: 'Docs', role: 'developer', createdAt: '2020-01-01T00:00:00.000Z' },
+      ],
+    }), { acceptInvitation })
+    expect(screen.getByText('Invitations for you')).toBeTruthy()
+    expect(screen.getByText('Docs')).toBeTruthy()
+    fireEvent.click(screen.getAllByRole('button', { name: 'Accept' })[1]!)
+    expect(acceptInvitation).toHaveBeenCalledWith('i2')
+  })
+
+  it('hides the invitation section when nothing is addressed to the user', () => {
+    panel(readyState({ invitationsForMe: [] }))
+    expect(screen.queryByText('Invitations for you')).toBeNull()
   })
 
   it('closes by clicking the backdrop, not the panel itself', () => {
@@ -177,15 +215,15 @@ describe('WorkspacesPanel', () => {
     const setMemberRole = vi.fn()
     const dev: CollabMemberView = { ...MEMBER, userId: 'u2', email: 'lina@example.com', name: 'Lina', role: 'developer' }
     panel(readyState({ selectedId: 'w1', myRole: 'admin', members: [dev], invitations: [] }), { setMemberRole })
-    expect(screen.getByText('开发者')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '设为管理员' }))
+    expect(screen.getByText('Developer')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Make admin' }))
     expect(setMemberRole).toHaveBeenCalledWith('u2', 'admin')
   })
 
   it('invites as admin through the role select and the Enter key', () => {
     const invite = vi.fn()
     panel(readyState({ selectedId: 'w1', myRole: 'admin', members: [], invitations: [] }), { invite })
-    fireEvent.click(screen.getByRole('button', { name: '＋ 邀请成员' }))
+    fireEvent.click(screen.getByRole('button', { name: '＋ Invite member' }))
     const emailInput = screen.getByPlaceholderText('name@example.com')
     fireEvent.change(emailInput, { target: { value: 'carol@example.com' } })
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'admin' } })
@@ -197,17 +235,17 @@ describe('WorkspacesPanel', () => {
 
   it('disables the invite and create submit while their fields are empty', () => {
     panel(readyState({ selectedId: 'w1', myRole: 'admin', members: [], invitations: [] }))
-    fireEvent.click(screen.getByRole('button', { name: '＋ 邀请成员' }))
-    expect(screen.getByRole('button', { name: '邀请' })).toHaveProperty('disabled', true)
-    fireEvent.click(screen.getByText('＋ 新建工作区'))
-    expect(screen.getByRole('button', { name: '创建' })).toHaveProperty('disabled', true)
+    fireEvent.click(screen.getByRole('button', { name: '＋ Invite member' }))
+    expect(screen.getByRole('button', { name: 'Invite' })).toHaveProperty('disabled', true)
+    fireEvent.click(screen.getByText('＋ New workspace'))
+    expect(screen.getByRole('button', { name: 'Create' })).toHaveProperty('disabled', true)
   })
 
   it('creates from the name field with the Enter key', () => {
     const create = vi.fn()
     panel(readyState(), { create })
-    fireEvent.click(screen.getByText('＋ 新建工作区'))
-    const nameInput = screen.getByPlaceholderText('工作区名称')
+    fireEvent.click(screen.getByText('＋ New workspace'))
+    const nameInput = screen.getByPlaceholderText('Workspace name')
     fireEvent.change(nameInput, { target: { value: 'Gamma' } })
     fireEvent.keyDown(nameInput, { key: 'a' })
     expect(create).not.toHaveBeenCalled()
@@ -219,30 +257,5 @@ describe('WorkspacesPanel', () => {
     const nameless: CollabMemberView = { ...MEMBER, name: '' }
     panel(readyState({ selectedId: 'w1', myRole: 'developer', members: [nameless], invitations: [] }))
     expect(screen.getByText('owen@example.com')).toBeTruthy()
-  })
-})
-
-describe('WorkspacesTrigger', () => {
-  it('renders nothing while the collab surface is absent', () => {
-    cleanup()
-    render(<WorkspacesTrigger useCollabWorkspaces={sel => sel(readyState({ open: false, availability: 'hidden' }))} actions={actions()} />)
-    expect(screen.queryByRole('button')).toBeNull()
-  })
-
-  it('renders the foot action and toggles the panel on click', () => {
-    cleanup()
-    const openPanel = vi.fn()
-    const closePanel = vi.fn()
-    render(
-      <WorkspacesTrigger useCollabWorkspaces={sel => sel(readyState({ open: false }))} actions={{ ...actions(), openPanel, closePanel }} />,
-    )
-    fireEvent.click(screen.getByRole('button', { name: '工作台' }))
-    expect(openPanel).toHaveBeenCalledTimes(1)
-    cleanup()
-    render(
-      <WorkspacesTrigger useCollabWorkspaces={sel => sel(readyState({ open: true }))} actions={{ ...actions(), openPanel, closePanel }} />,
-    )
-    fireEvent.click(screen.getByRole('button', { name: '工作台' }))
-    expect(closePanel).toHaveBeenCalledTimes(1)
   })
 })

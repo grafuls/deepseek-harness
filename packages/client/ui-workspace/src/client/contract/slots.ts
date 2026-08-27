@@ -51,12 +51,24 @@ export interface DirectoryFlowOwnerProps {
   onError: (message: string) => void
 }
 
+/**
+ * Owner share of the collab section hole under the browsing region: the
+ * column display state, so the occupant can collapse to a rail
+ * representation (the owner already gates the outlet to wide columns).
+ */
+export interface SidebarCollabOwnerProps {
+  /** Whether the sidebar renders wide content (false = 56px rail). */
+  wide: boolean
+}
+
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {
     /** Directory-flow hole under the conversation empty-state picker (declared by the WorkspacePicker entry). */
     'conversation.hero.workspace.directoryFlow': { kind: 'single'; scope: 'root'; owner: DirectoryFlowOwnerProps }
     /** Directory-flow hole under the sidebar browsing region (declared by the WorkspaceBrowser entry). */
     'sidebar.workspaces.directoryFlow': { kind: 'single'; scope: 'root'; owner: DirectoryFlowOwnerProps }
+    /** Collaborative-workspaces section under the sidebar browsing region (declared by the WorkspaceBrowser entry). */
+    'sidebar.workspaces.collab': { kind: 'single'; scope: 'root'; owner: SidebarCollabOwnerProps }
   }
 }
 
@@ -142,7 +154,7 @@ export type WorkspaceBrowserInjected = {
 /** Full browser props: shell owner share + viewing store + injected actions + the locale seat. */
 export type WorkspaceBrowserProps =
   PropsRuntime<'sidebar.workspaces'>
-  & PropsRenderSlots<'sidebar.workspaces.directoryFlow'>
+  & PropsRenderSlots<'sidebar.workspaces.directoryFlow' | 'sidebar.workspaces.collab'>
   & PropsStore<ReturnType<typeof createWorkspaceViewStore>>
   & Omit<WorkspaceBrowserInjected, 'hooks'>
   & PropsHooks<WorkspaceBrowserInjected['hooks']>

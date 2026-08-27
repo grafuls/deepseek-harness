@@ -11,6 +11,8 @@ import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 // Type-only: pulls the ui-layout SlotMap augmentation (shell.overlay) into
 // this program; the client bundle emits no request for the layout.
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+// Type-only: pulls the locale plugin's Context merge (ctx.locale).
+import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import type { CollabGateInjected } from './LoginGate.tsx'
 import { LoginGate } from './LoginGate.tsx'
@@ -18,9 +20,17 @@ import {
   buildSignInUrl, COLLAB_GATE_INITIAL, probeCollabSession, signInFailure,
   type CollabGateState,
 } from './contract.ts'
+import { NS, en, zh, type AuthKey } from './locales.ts'
 
-/** Required services (cordis fiber inject): the slot registry. */
-export const inject = ['slots']
+declare module '@deepseek-ai/dsh-client-ui-slots' {
+  interface LocaleNamespaceMap {
+    /** The collab sign-in gate copy. */
+    'collab.auth': AuthKey
+  }
+}
+
+/** Required services (cordis fiber inject): the slot registry and the locale registry. */
+export const inject = ['slots', 'locale']
 
 /**
  * Client plugin body: probe the session on mount (and whenever the window
@@ -44,11 +54,13 @@ export function apply(ctx: ClientContext): void {
       ...(failure === undefined ? {} : { signInError: failure }),
     }
   }
+  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-auth: sign-in gate dictionaries')
   ctx.effect(() => {
     probe()
     const dispose = ctx.slots.inject('shell.overlay', () => ctx.slots.register({
       name: 'shell.overlay',
       id: 'collab-login-gate',
+      locale: NS,
       inject: injected,
     }, LoginGate))
     window.addEventListener('focus', probe)

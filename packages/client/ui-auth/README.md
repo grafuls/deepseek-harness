@@ -34,4 +34,4 @@ The package contributes nothing to model requests, so it cannot invalidate cache
 
 - **No connection-level recovery after sign-in** — the OIDC round-trip is a full-page navigation, so the app behind the gate reloads with the fresh cookie rather than hot-reconnecting the `/api` transport. Live recovery of a 401'd connection is deferred.
 - **Fail-open UI, not enforcement** — this plugin only surfaces the session verdict; it never claims to authorize or deny requests. A collab instance must keep the collab API gateway (its own 401 fence) mounted.
-- **The gate reads the current-language copy** — the overlay ships Chinese product copy only; an English locale for the card is deferred.
+- **Copy follows the active app locale** — the gate registers its `collab.auth` dictionary (Chinese + English) on the standard locale seat, so the card language tracks the GUI's Language setting rather than a hardcoded string.

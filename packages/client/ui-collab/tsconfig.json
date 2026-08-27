@@ -12,6 +12,9 @@
       "path": "../../../vendor/cordis"
     },
     {
+      "path": "../locale"
+    },
+    {
       "path": "../runtime"
     },
     {
@@ -21,7 +24,7 @@
       "path": "../ui-layout"
     },
     {
-      "path": "../ui-sidebar"
+      "path": "../ui-workspace"
     },
     {
       "path": "../ui-slots"

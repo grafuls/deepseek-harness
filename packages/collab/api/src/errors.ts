@@ -10,6 +10,8 @@ declare module '@deepseek-ai/dsh-host-apiproxy/api' {
     'collab-forbidden': {} // no details; the message names the denied action
     'collab-not-found': {} // no details; the message names the missing referent
     'collab-bad-request': {} // no details; the message names the invalid field
+    'collab-internal': {} // no details; the message names the missing host service
+    'collab-name-conflict': {} // no details; the message names the colliding title
   }
 }
 
@@ -18,6 +20,8 @@ export type CollabErrorCode =
   | 'collab-forbidden'
   | 'collab-not-found'
   | 'collab-bad-request'
+  | 'collab-internal'
+  | 'collab-name-conflict'
 
 /**
  * Build the failure branch of an RpcResult for one collab code.

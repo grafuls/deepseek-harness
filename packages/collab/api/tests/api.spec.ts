@@ -19,7 +19,7 @@ import { apply, COLLAB_AUTH_LOGIN_PATH, COLLAB_AUTH_LOGOUT_PATH, COLLAB_AUTH_SES
 import { dispatchCollabEndpoint, workspaceDataDir } from '../src/dispatch.ts'
 import { collabError } from '../src/errors.ts'
 import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
-import type { CollabWorkspaceView } from '../src/types.ts'
+import type { CollabMountedWorkspaceView, CollabWorkspaceView } from '../src/types.ts'
 
 /** A deterministic OIDC gateway standing in for Google. */
 function fakeGateway(overrides: Partial<OidcGateway> = {}): OidcGateway {
@@ -130,6 +130,53 @@ function flush(): Promise<void> {
   return new Promise<void>(resolve => setImmediate(resolve))
 }
 
+/** A fake Host workspace registry: one record created over a given dir plus optional titled lookalikes. */
+function fakeWorkspaceRegistry(dir: string): {
+  register: (ctx: Context) => void
+  entity: {
+    id: string
+    path: string
+    readonly title: string
+    sessionIds: string[]
+    setTitle: (title: string) => Promise<void>
+  }
+  createCalls: Array<{ path: string; title?: string }>
+  addConflict: (id: string, title: string) => void
+} {
+  let title = 'Team'
+  const entity = {
+    id: 'host-ws-1',
+    path: dir,
+    get title() { return title },
+    sessionIds: [] as string[],
+    createdAt: '2020-01-01T00:00:00.000Z',
+    updatedAt: '2020-01-01T00:00:00.000Z',
+    setTitle: async (next: string) => { title = next },
+  }
+  const others: Array<{ id: string; title: string }> = []
+  const createCalls: Array<{ path: string; title?: string }> = []
+  const createdPaths = new Set<string>()
+  const registry = {
+    list: () => [{ id: entity.id, title }, ...others],
+    create: async (path: string, wanted?: string): Promise<typeof entity> => {
+      createCalls.push({ path, ...(wanted === undefined ? {} : { title: wanted }) })
+      // The real registry is idempotent by canonical path: the title is seated
+      // only at first create, never re-applied on reuse.
+      if (!createdPaths.has(path)) {
+        createdPaths.add(path)
+        if (wanted !== undefined) title = wanted
+      }
+      return entity
+    },
+  }
+  return {
+    register: (ctx) => { ctx.provide('workspaceRegistry', registry) },
+    entity,
+    createCalls,
+    addConflict: (id, conflictTitle) => { others.push({ id, title: conflictTitle }) },
+  }
+}
+
 describe('collab/auth methods', () => {
   it('reports the authenticated caller identity', async () => {
     const boot = await bootServices()
@@ -190,6 +237,63 @@ describe('collab/workspace methods', () => {
     expectCollabError(denied, 'collab-forbidden')
   })
 
+  it('mounts a collab workspace as a real host workspace over its data directory', async () => {
+    const boot = await bootServices()
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Team' })) as CollabWorkspaceView
+    const dir = workspaceDataDir(boot.ctx.collabWorkspaces.root, created.id)
+    const fake = fakeWorkspaceRegistry(dir)
+    fake.register(boot.ctx)
+    const mounted = value(await call(boot, boot.admin, 'collab/workspace.open', { workspaceId: created.id })) as CollabMountedWorkspaceView
+    expect(mounted.dir).toBe(dir)
+    expect(mounted.workspace).toMatchObject({ workspaceId: 'host-ws-1', path: dir, title: 'Team', sessionIds: [] })
+    expect(fake.createCalls).toEqual([{ path: dir, title: 'Team' }])
+  })
+
+  it('mounts idempotently and re-asserts the collab title over a host rename', async () => {
+    const boot = await bootServices()
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Team' })) as CollabWorkspaceView
+    const dir = workspaceDataDir(boot.ctx.collabWorkspaces.root, created.id)
+    const fake = fakeWorkspaceRegistry(dir)
+    fake.register(boot.ctx)
+    await call(boot, boot.admin, 'collab/workspace.open', { workspaceId: created.id })
+    // A host-side rename diverges the title; the next open re-asserts the
+    // collab display name as the host title.
+    await fake.entity.setTitle('Team Edits')
+    const again = value(await call(boot, boot.admin, 'collab/workspace.open', { workspaceId: created.id })) as CollabMountedWorkspaceView
+    expect(again.workspace).toMatchObject({ workspaceId: 'host-ws-1', title: 'Team' })
+    expect(fake.createCalls).toHaveLength(2)
+  })
+
+  it('refuses a host title collision when re-asserting a renamed title', async () => {
+    const boot = await bootServices()
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Team' })) as CollabWorkspaceView
+    const dir = workspaceDataDir(boot.ctx.collabWorkspaces.root, created.id)
+    const fake = fakeWorkspaceRegistry(dir)
+    fake.register(boot.ctx)
+    await call(boot, boot.admin, 'collab/workspace.open', { workspaceId: created.id })
+    await fake.entity.setTitle('Team Edits')
+    fake.addConflict('host-ws-2', 'Team')
+    const conflicted = await call(boot, boot.admin, 'collab/workspace.open', { workspaceId: created.id })
+    expectCollabError(conflicted, 'collab-name-conflict')
+  })
+
+  it('mounts only for members', async () => {
+    const boot = await bootServices()
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Team' })) as CollabWorkspaceView
+    const dir = workspaceDataDir(boot.ctx.collabWorkspaces.root, created.id)
+    const fake = fakeWorkspaceRegistry(dir)
+    fake.register(boot.ctx)
+    const denied = await call(boot, boot.member, 'collab/workspace.open', { workspaceId: created.id })
+    expectCollabError(denied, 'collab-forbidden')
+  })
+
+  it('surfaces a missing host workspace registry as an internal error', async () => {
+    const boot = await bootServices()
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Team' })) as CollabWorkspaceView
+    const result = await call(boot, boot.admin, 'collab/workspace.open', { workspaceId: created.id })
+    expectCollabError(result, 'collab-internal')
+  })
+
   it('invites, lists, and revokes invitations with admin-only role gating', async () => {
     const boot = await bootServices()
     const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Team' })) as CollabWorkspaceView
@@ -230,6 +334,33 @@ describe('collab/workspace methods', () => {
     expectCollabError(again, 'collab-bad-request')
     const mismatch = await call(boot, boot.admin, 'collab/workspace.join', { invitationId: invitation.id })
     expect(mismatch.ok).toBe(false)
+  })
+
+  it('lists the pending invitations addressed to the caller and accepts them', async () => {
+    const boot = await bootServices()
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Alpha' })) as CollabWorkspaceView
+    const invitation = value(await call(boot, boot.admin, 'collab/workspace.invite', {
+      workspaceId: created.id,
+      email: boot.member.email,
+      role: 'admin',
+    })) as { id: string }
+
+    // The invitee sees only their own pending invitation, with the workspace name.
+    const mine = value(await call(boot, boot.member, 'collab/workspace.myInvitations', {})) as Array<{
+      id: string
+      workspaceId: string
+      workspaceName: string
+      role: string
+    }>
+    /* oxlint-disable-next-line typescript/no-unsafe-assignment -- expect() matchers are `any` by design. */
+    expect(mine).toEqual([{ id: invitation.id, workspaceId: created.id, workspaceName: 'Alpha', role: 'admin', createdAt: expect.any(String) }])
+    // A different email holder sees no invitation addressed to them.
+    expect(value(await call(boot, boot.admin, 'collab/workspace.myInvitations', {}))).toEqual([])
+
+    // Accepting joins the workspace and empties the caller's accept surface.
+    const joined = value(await call(boot, boot.member, 'collab/workspace.join', { invitationId: invitation.id })) as CollabWorkspaceView
+    expect(joined).toMatchObject({ id: created.id, role: 'admin', memberCount: 2 })
+    expect(value(await call(boot, boot.member, 'collab/workspace.myInvitations', {}))).toEqual([])
   })
 
   it('leaves and deletes a workspace by a member and its owner', async () => {

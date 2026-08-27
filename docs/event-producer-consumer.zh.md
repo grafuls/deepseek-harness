@@ -26,7 +26,7 @@
 | `approval/request` | `waterfall` | [`packages/interaction/user-approval/src/index.ts:30`](../packages/interaction/user-approval/src/index.ts) | [`user-approval`](../packages/interaction/user-approval) (`waterfall`) | [`acp`](../packages/acp/acp), `apiproxy` |
 | `authorization/settled` | `emit` | [`packages/credentials/authorization/src/index.ts:57`](../packages/credentials/authorization/src/index.ts) | [`authorization`](../packages/credentials/authorization) (`events.dispatch`) | [`authorization`](../packages/credentials/authorization) |
 | `collab/users/changed` | `emit` | [`packages/collab/users/src/index.ts:55`](../packages/collab/users/src/index.ts) | `users` (`emit`) | `users` |
-| `collab/workspaces/changed` | `emit` | [`packages/collab/workspaces/src/index.ts:75`](../packages/collab/workspaces/src/index.ts) | `workspaces` (`emit`) | `workspaces` |
+| `collab/workspaces/changed` | `emit` | [`packages/collab/workspaces/src/index.ts:82`](../packages/collab/workspaces/src/index.ts) | `workspaces` (`emit`) | `workspaces` |
 | `commands/change` | `emit` | [`packages/interaction/commands/src/types.ts:80`](../packages/interaction/commands/src/types.ts) | [`commands`](../packages/interaction/commands) (`events.dispatch`) | `apiproxy` |
 | `cordis/dynamic-package` | `emit` | [`packages/extensions/cordis-host-runner/src/types.ts:379`](../packages/extensions/cordis-host-runner/src/types.ts) | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) (`emit`) | `apiproxy` |
 | `cordis/dynamic-retract` | `emit` | [`packages/extensions/cordis-host-runner/src/types.ts:385`](../packages/extensions/cordis-host-runner/src/types.ts) | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) (`emit`) | `apiproxy` |

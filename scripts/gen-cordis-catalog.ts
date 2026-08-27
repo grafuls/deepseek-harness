@@ -570,6 +570,7 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   WorkspaceInvitation: 'collab invitation record is owned by packages/collab/workspaces/types.ts',
   WorkspaceMember: 'collab membership record is owned by packages/collab/workspaces/types.ts',
   WorkspaceSummary: 'collab member workspace view is owned by packages/collab/workspaces/types.ts',
+  WorkspaceInvitationForEmail: 'collab pending-invitation accept view is owned by packages/collab/workspaces/types.ts',
   UserRecord: 'collab user registry record is owned by packages/collab/users/types.ts',
   WorkspaceRegistrySnapshot: 'collab workspace registry snapshot is owned by packages/collab/workspaces/types.ts',
   BeginCommandRequest: 'event-local request contract is owned by packages/client/ui-input-trigger/src/types.ts',

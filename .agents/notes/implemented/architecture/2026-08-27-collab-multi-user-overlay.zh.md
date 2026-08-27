@@ -16,7 +16,7 @@ DeepSeek Harness 作为一个共享的 harness 进程运行，任何能访问它
 - **认证围栏** —— [dsh-collab-api](../../../../packages/collab/api/README.zh.md) 在共享连接上注册连接认证器：除非浏览器的 Cookie 解析为某个 principal，否则每个 `/api` RPC 与每个 WebSocket 升级都被拒绝 401。没有注册认证器时（单用户），连接保持开放，与今天一致。围栏是连接属主的一个运行时不变式，collab RPC 拦截器在该 principal 之下分发 `collab/*` 端点。
 - **身份与 RBAC** —— [dsh-collab-users](../../../../packages/collab/users/README.zh.md) 持有 Google 身份账户注册表，为每个账户带有全局 `admin`/`member` 角色；[dsh-collab-rbac](../../../../packages/collab/rbac/README.zh.md) 持有权限矩阵（全局 member = 创建/加入工作区，admin 增加用户管理；工作区 developer = 使用并读取成员，admin 增加邀请/管理/删除）。成员可以创建工作区；新登录不会自动创建工作区。
 - **工作区与数据作用域** —— [dsh-collab-workspaces](../../../../packages/collab/workspaces/README.zh.md) 在配置的根目录（默认 `$DSH_HOME/collab`）下维护持久的 `users.json`/`workspaces.json` 以及每个工作区一个 `workspaces/<id>` 数据目录，因此按工作区隔离的数据以目录形式交付，而不是一个共享会话平面。成员资格按邀请邮箱加入；创建者成为 owner+admin，owner 不能离开或被降级，最后一个 admin 也不能被降级。
-- **浏览器面** —— [dsh-client-ui-auth](../../../../packages/client/ui-auth/README.zh.md) 在浏览器未持有会话 Cookie 时用登录卡片覆盖整个应用；[dsh-client-ui-collab](../../../../packages/client/ui-collab/README.zh.md) 从侧栏底部触发器与覆盖层面板，经 GUI 其余部分使用的同一条共享 `/api` RPC 信封，列出、创建、邀请并管理工作区。两者都经 `slots.inject` 组合出去，因此没有 collab 覆盖层时什么都不会挂载，非 collab 安装渲染结果不变。
+- **浏览器面** —— [dsh-client-ui-auth](../../../../packages/client/ui-auth/README.zh.md) 在浏览器未持有会话 Cookie 时用登录卡片覆盖整个应用；[dsh-client-ui-collab](../../../../packages/client/ui-collab/README.zh.md) 从侧边栏 Workspaces 列表下方的 collab 区块（点一行会打开管理器遮罩查看成员与角色详情）与 `shell.overlay` 管理器面板，经 GUI 其余部分使用的同一条共享 `/api` RPC 信封，列出、创建、接受发给当前用户的邀请并管理工作区（接受行读取 `collab/workspace.myInvitations`，并经 `collab/workspace.join` 加入）。某一行的「打开」调用 `collab/workspace.open`，把 collab 工作区挂载为保留的 `workspaces/<id>` 数据目录之上的真实主机工作区（按路径幂等，标题按主机注册表的唯一性不变量重新断言为 collab 名称），并经由运行时 Workspace 面把 GUI 切换进它，于是被挂载的工作区也会出现在标准 Workspaces 列表中，每个成员打开的都是同一个主机工作区。两者都经 `slots.inject` 组合出去，因此没有 collab 覆盖层时什么都不会挂载，非 collab 安装渲染结果不变。它们的产品文案不是写死的：各自在标准 locale seat 上注册一个词典命名空间（`collab.auth`、`collab.ui`），因此门与工作区管理器跟随 GUI 的语言设置（未声明支持语言的浏览器回退到英文）。
 
 ## Alternatives considered
 
@@ -38,4 +38,4 @@ OIDC 往返是一次整页导航，因此 ui-auth 通过页面重新加载带新
 
 ## Consequences
 
-一个进程服务许多用户，但对浏览器保持单一共享实例平面：每个浏览器一个会话 Cookie，工作区按数据目录作用域，而不是自己的登录或会话。围栏覆盖每个 `/api` RPC 与 WebSocket 升级，这正是真正权威所在；GUI 层（先 ui-auth 后 ui-collab）只 fail-open，并在此基础上添加 wait-for-ready 探测。四个精确认证路由有意绕过 RPC 信任围栏，且在任何主机上都可达，只对优先 localhost 的部署安全——作为已知权衡记录，而非静默地「受保护」。RBAC 在独立包中带着类型化权限矩阵，因此按工作区策略无需完整 GUI 即可测试；整个功能的持久性由一个 REAL-composition 测试固定：它通过 Loader 以 fake OIDC 网关启动 `web-collab` profile。
+一个进程服务许多用户，但对浏览器保持单一共享实例平面：每个浏览器一个会话 Cookie，工作区按数据目录作用域，而不是自己的登录或会话。围栏覆盖每个 `/api` RPC 与 WebSocket 升级，这正是真正权威所在；GUI 层（先 ui-auth 后 ui-collab）只 fail-open，并在此基础上添加 wait-for-ready 探测。四个精确认证路由有意绕过 RPC 信任围栏，且在任何主机上都可达，只对优先 localhost 的部署安全——作为已知权衡记录，而非静默地「受保护」。RBAC 在独立包中带着类型化权限矩阵，因此按工作区策略无需完整 GUI 即可测试。整个功能的持久性由一个 REAL-composition 测试固定：它通过 Loader 以 fake OIDC 网关启动 `web-collab` profile；该组合还挂载真实主机工作区注册表（内存域存储），其中一条用例断言两个成员打开同一个 collab 工作区解析到同一个真实 Workspace，其规范路径即 collab 数据目录。

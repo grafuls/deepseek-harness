@@ -31,17 +31,19 @@ Collab API 网关：一个函数插件，把共享的 harness 进程转变为 Go
 | `collab/workspace.dir` | collab 根目录下按 workspace 隔离的数据目录，按需实体化 |
 | `collab/workspace.invite` | 按邮箱邀请到某个角色（`admin`/`developer`）；仅 workspace 管理员 |
 | `collab/workspace.invitations` | 未完成的邀请；仅 workspace 管理员 |
+| `collab/workspace.myInvitations` | 发给调用者邮箱的待处理邀请，附带目标 workspace 名称 |
 | `collab/workspace.revokeInvitation` | 撤销邀请；仅 workspace 管理员 |
 | `collab/workspace.join` | 接受发给调用者的邀请 |
 | `collab/workspace.leave` | 离开 workspace（所有者必须改为删除） |
 | `collab/workspace.delete` | 删除 workspace；仅 workspace 所有者 |
 | `collab/workspace.setMemberRole` | 修改成员角色；仅 workspace 管理员 |
 | `collab/workspace.removeMember` | 移除成员；仅 workspace 管理员 |
+| `collab/workspace.open` | 把 collab 工作区挂载为保留数据目录之上的真实主机工作区（成员即可打开）；主机注册表为每个成员解析到同一个工作区 |
 | `collab/users.list` | 账号名册；仅实例管理员 |
 | `collab/users.setGlobalRole` | 提升/降级账号（`admin`/`member`）；仅实例管理员 |
 | `collab/users.setDisabled` | 禁用/启用账号；仅实例管理员 |
 
-错误折叠到封闭的 `RpcError` 代码集：授权拒绝（服务 RBAC）为 `collab-forbidden`，未知 workspace 为 `collab-not-found`，畸形的线上字段或其他服务失败为 `collab-bad-request`。每个端点在线上边界完成校验，然后委托给所属服务，由服务负责持久化与 RBAC。
+错误折叠到封闭的 `RpcError` 代码集：授权拒绝（服务 RBAC）为 `collab-forbidden`，未知 workspace 为 `collab-not-found`，畸形的线上字段或其他服务失败为 `collab-bad-request`，缺少主机服务（组合中没有工作区注册表）为 `collab-internal`，重新断言与另一个主机工作区标题冲突的 collab 名称为 `collab-name-conflict`。每个端点在线上边界完成校验，然后委托给所属服务，由服务负责持久化与 RBAC。
 
 ## 配置
 
@@ -79,5 +81,5 @@ The package contributes nothing to model requests, so it cannot invalidate cache
 
 - **认证路由在 localhost 上绕过 JSON-RPC 围栏** —— login、callback、session、logout 四条精确路由在 `/api` 前缀路由之前应答，因此不携带信任围栏或信封检查。这对回环开发绑定上的 OIDC 流程可以接受；非回环部署必须在前端架设 TLS，并让 `baseUrl`/`redirectUri` 指向 IdP 实际重定向返回的公开主机。
 - **回调路径必须与 `collabAuth.redirectUri` 一致** —— 回调路由由重定向 URI 的 pathname 推导而来，因此不一致的 `redirectUri` 会使登录直接失败，而非静默错指。
-- **在线会话平面是共享的，而非按 workspace 隔离** —— 认证与活动会话位于进程平面；按 workspace 的持久化边界是 `$DSH_HOME/.../collab/workspaces/<wsId>` 数据目录。按 workspace 的会话或上下文隔离留待后续。
+- **单一进程会话平面，按 workspace 绑定会话** —— 认证与活动会话位于进程平面（浏览器持有一个会话 Cookie），因此 collab workspace 没有自己的登录；打开一个 workspace 会将其挂载为真实 Host workspace，成员在其中启动的会话被绑定到共享的 `$DSH_HOME/.../collab/workspaces/<wsId>` 数据目录。
 - **`loader.await()` 不代表 collab 表面已就绪** —— 依赖方的激活在树报告加载完成之后还有一个 tick 才落定，因此就绪消费者应先探测 `/api/collab/auth/session` 再发起请求（真实组合测试正是这么做的）。

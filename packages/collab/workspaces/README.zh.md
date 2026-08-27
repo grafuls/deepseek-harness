@@ -49,6 +49,7 @@ await ctx.collabWorkspaces.get(actorWorkspaceRole, memberId, wsId) // needs work
 ctx.collabWorkspaces.listFor(memberId) // own membership summaries
 ctx.collabWorkspaces.roleOf(wsId, memberId) // sync hot path
 const invite: InvitationId = (await ctx.collabWorkspaces.invite(adminWorkspaceRole, wsId, memberId, email)).id // needs workspace.invite
+ctx.collabWorkspaces.listPendingForEmail(email) // the pending invitations addressed to one email (the accept surface)
 await ctx.collabWorkspaces.join(memberGlobal, memberId, email, invite) // needs workspace.join
 await ctx.collabWorkspaces.revokeInvitation(adminWorkspaceRole, wsId, invite) // needs workspace.invite
 await ctx.collabWorkspaces.leave(actorWorkspaceRole, memberId, wsId) // needs workspace.use

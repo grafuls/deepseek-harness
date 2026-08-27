@@ -6,7 +6,7 @@
  * durable per-workspace output. The only mocked external is Google OIDC.
  */
 
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, existsSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -14,12 +14,16 @@ import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import { WebServer } from '@deepseek-ai/dsh-host-webserver'
+import Storage from '@deepseek-ai/dsh-storage'
+import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
+import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
 import { CollabAuth, type OidcGateway } from '@deepseek-ai/dsh-collab-auth'
 import { CollabUsers } from '@deepseek-ai/dsh-collab-users'
 import { CollabWorkspaces } from '@deepseek-ai/dsh-collab-workspaces'
 import { apply as connectionApply } from '@deepseek-ai/dsh-client-connection'
 import { apply as collabApiApply } from '../src/index.ts'
 import { afterEach, describe, expect, it } from 'vitest'
+import { MemoryStorageBackend } from '../../../storage/storage-domain/tests/helpers/memory-backend.ts'
 
 interface Observed {
   root: string
@@ -34,6 +38,11 @@ interface RuntimeGlobals {
   __collabWorkspacesClass: typeof CollabWorkspaces
   __collabAuthClass: typeof CollabAuth
   __collabApiApply: typeof collabApiApply
+  __collabStorageClass: typeof Storage
+  __collabMemoryBackendClass: typeof MemoryStorageBackend
+  __collabDomainFacilityClass: typeof DomainFacility
+  __collabWorkspaceRegistryClass: typeof WorkspaceRegistry
+  __collabHostWorkspaces: (ctx: Context) => Promise<void>
   __collabFakeGateway: OidcGateway
   __collabWebContext: Context
 }
@@ -46,6 +55,22 @@ globals.__collabUsersClass = CollabUsers
 globals.__collabWorkspacesClass = CollabWorkspaces
 globals.__collabAuthClass = CollabAuth
 globals.__collabApiApply = collabApiApply
+globals.__collabStorageClass = Storage
+globals.__collabMemoryBackendClass = MemoryStorageBackend
+globals.__collabDomainFacilityClass = DomainFacility
+globals.__collabWorkspaceRegistryClass = WorkspaceRegistry
+globals.__collabHostWorkspaces = async (ctx) => {
+  // The real Host workspace registry over an in-memory domain store, mirroring
+  // the host's own workspace harness: `collab/workspace.open` resolves the
+  // registry a product composition mounts. The `storage` entry already mounted
+  // the hub this entry injects.
+  ctx.storage.backend.register('memory', new MemoryStorageBackend())
+  const domain = new DomainFacility(ctx, { backend: 'memory', routes: {} })
+  ctx.storage.mount('domain', domain)
+  ctx.provide('storageDomain', domain)
+  ctx.provide('sessionPersistence', { list: () => Promise.resolve([]) } as never)
+  await ctx.plugin(WorkspaceRegistry)
+}
 globals.__collabFakeGateway = {
   issuer: 'https://accounts.google.test',
   async authorizationUrl(state: string, nonce: string): Promise<string> {
@@ -108,12 +133,23 @@ export const name = 'collab-api'
 export const inject = ['webServer', 'connection', 'collabAuth', 'collabUsers', 'collabWorkspaces']
 export function apply(ctx) { return globalThis.__collabApiApply(ctx) }
 `)
+  const storage = fixture('storage.mjs', `
+export const name = 'storage'
+export function apply(ctx) { return ctx.plugin(globalThis.__collabStorageClass) }
+`)
+  const hostWorkspaces = fixture('host-workspaces.mjs', `
+export const name = 'host-workspaces'
+export const inject = ['storage']
+export function apply(ctx) { return globalThis.__collabHostWorkspaces(ctx) }
+`)
   rows.push('- id: webserver', `  name: ${webserver}`, '  config:', '    host: 127.0.0.1', '    port: 0')
   rows.push('- id: client-connection', `  name: ${connection}`)
   rows.push('- id: collab-users', `  name: ${users}`, '  config:', `    root: ${join(root, 'users')}`)
   rows.push('- id: collab-workspaces', `  name: ${workspaces}`, '  config:', `    root: ${join(root, 'workspaces')}`)
   rows.push('- id: collab-auth', `  name: ${auth}`, '  config:', '    clientId: test-client', '    clientSecret: test-secret', '    secret: test-signing-secret')
   rows.push('- id: collab-api', `  name: ${api}`)
+  rows.push('- id: storage', `  name: ${storage}`)
+  rows.push('- id: host-workspaces', `  name: ${hostWorkspaces}`)
   const cordisFile = join(root, 'cordis.yml')
   writeFileSync(cordisFile, rows.join('\n'))
 
@@ -241,11 +277,25 @@ describe('real collab web composition', () => {
     expect(invitation.ok).toBe(true)
     const invitations = await call(base, owen, 'collab/workspace.invitations', { workspaceId: wsId })
     const inviteId = (invitations.value as Array<{ id: string }>)[0]!.id
+    // The invitee sees the pending invitation addressed to them, others do not.
+    const mine = await call(base, lina, 'collab/workspace.myInvitations', {})
+    expect(mine.ok).toBe(true)
+    expect(mine.value).toEqual([
+      /* oxlint-disable-next-line typescript/no-unsafe-assignment -- expect() matchers are `any` by design. */
+      { id: inviteId, workspaceId: wsId, workspaceName: 'Alpha', role: 'developer', createdAt: expect.any(String) },
+    ])
+    const notMine = await call(base, owen, 'collab/workspace.myInvitations', {})
+    expect(notMine.ok).toBe(true)
+    expect(notMine.value).toEqual([])
     const joined = await call(base, lina, 'collab/workspace.join', { invitationId: inviteId })
     expect(joined.ok).toBe(true)
     expect(joined.value).toMatchObject({ id: wsId, role: 'developer', memberCount: 2 })
     const afterJoin = await call(base, lina, 'collab/workspace.list', {})
     expect(afterJoin.value).toHaveLength(1)
+    // Consuming the invitation empties the invitee's accept surface.
+    const mineAfter = await call(base, lina, 'collab/workspace.myInvitations', {})
+    expect(mineAfter.ok).toBe(true)
+    expect(mineAfter.value).toEqual([])
   })
 
   it('signs out by clearing the session cookie', async () => {
@@ -257,5 +307,43 @@ describe('real collab web composition', () => {
     const probe = await fetch(`${base}/api/collab/auth/session`)
     expect(await probe.json()).toEqual({ authenticated: false })
     void cookie
+  })
+
+  it('mounts a collab workspace as a real host workspace shared across members', async () => {
+    const { base, root } = await boot()
+    const owen = await signIn(base, 'oauth-owen')
+    const created = await call(base, owen, 'collab/workspace.create', { name: 'Alpha' })
+    expect(created.ok).toBe(true)
+    const wsId = (created.value as { id: string }).id
+    // A non-member is refused before any host registry is consulted.
+    const lina = await signIn(base, 'oauth-lina')
+    const denied = await call(base, lina, 'collab/workspace.open', { workspaceId: wsId })
+    expect(denied.ok).toBe(false)
+    expect(denied.error?.code).toBe('collab-forbidden')
+    // lina joins as a member, then both members open the SAME real Host
+    // workspace over the collab data directory (the registry resolves it
+    // idempotently by canonical path).
+    const invitation = await call(base, owen, 'collab/workspace.invite', { workspaceId: wsId, email: 'lina@example.com' })
+    expect(invitation.ok).toBe(true)
+    const invitationId = ((await call(base, lina, 'collab/workspace.myInvitations', {})) as { value: Array<{ id: string }> }).value[0]!.id
+    const joined = await call(base, lina, 'collab/workspace.join', { invitationId })
+    expect(joined.ok).toBe(true)
+    const dir = join(root, 'workspaces', 'workspaces', wsId)
+    const owenMounted = await call(base, owen, 'collab/workspace.open', { workspaceId: wsId })
+    expect(owenMounted.ok).toBe(true)
+    // The mount materializes the directory; the workspace holds its canonical path.
+    const canonical = realpathSync.native(dir)
+    expect(owenMounted.value).toMatchObject({
+      dir,
+      workspace: { path: canonical, title: 'Alpha' },
+    })
+    const hostId = (owenMounted.value as { workspace: { workspaceId: string } }).workspace.workspaceId
+    expect(existsSync(dir)).toBe(true)
+    const linaMounted = await call(base, lina, 'collab/workspace.open', { workspaceId: wsId })
+    expect(linaMounted.ok).toBe(true)
+    expect((linaMounted.value as { workspace: { workspaceId: string } }).workspace.workspaceId).toBe(hostId)
+    // The real registry itself accounts the workspace at the collab directory.
+    const registry = globals.__collabWebContext.get('workspaceRegistry') as { get(id: string): { path: string } | undefined } | undefined
+    expect(registry?.get(hostId)?.path).toBe(canonical)
   })
 })

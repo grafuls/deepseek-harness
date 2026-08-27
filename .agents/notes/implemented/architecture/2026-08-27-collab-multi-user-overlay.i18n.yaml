@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-27-collab-multi-user-overlay.md
-2026-08-27-collab-multi-user-overlay.md: c615cf2ce197951632488d24b3d72256ba796f11
-2026-08-27-collab-multi-user-overlay.zh.md: ee429f76b6fddbf40653bcc53fab8df286055520
+2026-08-27-collab-multi-user-overlay.md: 91bf382eefc1c128ab9730e7e34f3c181ae1fcd7
+2026-08-27-collab-multi-user-overlay.zh.md: e078fc1e778dbbc2f699fbe846fcd5bfee50b202

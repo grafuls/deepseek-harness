@@ -20,8 +20,10 @@ import type {
 } from '@deepseek-ai/dsh-collab-workspaces'
 import { InvitationId as makeInvitationId, WorkspaceId as makeWorkspaceId } from '@deepseek-ai/dsh-collab-workspaces'
 import type {
+  CollabInvitationForMeView,
   CollabInvitationView,
   CollabMemberView,
+  CollabMountedWorkspaceView,
   CollabPrincipalView,
   CollabStatusView,
   CollabUserView,
@@ -240,6 +242,76 @@ ENDPOINTS.set('collab/workspace.dir', async (ctx, principal, args) => {
   return collabOk<CollabWorkspaceDirView>({ dir })
 })
 
+/** The Host workspace surface a mounted collab workspace resolves to (structural read of `ctx.workspaceRegistry`). */
+interface MountedWorkspaceLike {
+  /** Host workspace id (branded string on the wire). */
+  id: string
+  /** Canonical directory the workspace holds. */
+  path: string
+  /** Display title. */
+  title: string
+  /** Sessions accounted under this workspace. */
+  sessionIds: readonly string[]
+  /** Host record creation instant (ISO 8601). */
+  createdAt: string
+  /** Host record last-mutation instant (ISO 8601). */
+  updatedAt: string
+  /** Rename the workspace record. */
+  setTitle(title: string): Promise<void>
+}
+
+/** The `WorkspaceRegistry` surface the mount reads (strict optional: the collab overlay requires a host process). */
+interface MountedWorkspaceRegistryLike {
+  /** Every registered workspace (title-uniqueness reads). */
+  list(): readonly { id: string; title: string }[]
+  /** Create a workspace over an existing directory, idempotently resolving the one already owning the path. */
+  create(path: string, title?: string): Promise<MountedWorkspaceLike>
+}
+
+/**
+ * Mount a collab workspace as a real Host workspace over its reserved data
+ * directory (`<collab root>/workspaces/<workspaceId>`). Any member may open
+ * it; the Host registry resolves the SAME workspace for every member (the
+ * path-based create is idempotent), so sessions born inside it land their
+ * logs and files in the shared collab directory. The collab display name is
+ * re-asserted as the Host title on reuse, guarding the Host registry's
+ * title-uniqueness invariant.
+ */
+ENDPOINTS.set('collab/workspace.open', async (ctx, principal, args) => {
+  const raw = requireString(args, 'workspaceId', 'collab/workspace.open')
+  const { wsId } = requireWorkspaceAndRole(ctx, principal, raw)
+  const registry = ctx.get('workspaceRegistry', false) as MountedWorkspaceRegistryLike | undefined
+  if (registry === undefined) {
+    throw new CollabWireError('collab-internal', 'collab: the host workspace registry is not mounted; cannot open a collab workspace')
+  }
+  const record = ctx.collabWorkspaces.findById(wsId)
+  // requireWorkspaceAndRole proved the record exists; a miss here is an
+  // internal inconsistency (the maps change only through the same service).
+  /* v8 ignore start -- unreachable through the API (see above). */
+  if (record === undefined) throw new CollabWireError('collab-not-found', `collab: workspace '${wsId}' does not exist`)
+  /* v8 ignore stop */
+  const dir = workspaceDataDir(ctx.collabWorkspaces.root, wsId)
+  await mkdir(dir, { recursive: true })
+  const workspace = await registry.create(dir, record.name)
+  if (workspace.title !== record.name) {
+    if (registry.list().some(other => other.id !== workspace.id && other.title === record.name)) {
+      throw new CollabWireError('collab-name-conflict', `collab: another workspace is already named '${record.name}'`)
+    }
+    await workspace.setTitle(record.name)
+  }
+  return collabOk<CollabMountedWorkspaceView>({
+    workspace: {
+      workspaceId: workspace.id,
+      path: workspace.path,
+      title: workspace.title,
+      sessionIds: [...workspace.sessionIds],
+      createdAt: workspace.createdAt,
+      updatedAt: workspace.updatedAt,
+    },
+    dir,
+  })
+})
+
 ENDPOINTS.set('collab/workspace.invite', async (ctx, principal, args) => {
   const { wsId, role } = requireWorkspaceAndRole(ctx, principal, requireString(args, 'workspaceId', 'collab/workspace.invite'))
   const email = requireString(args, 'email', 'collab/workspace.invite')
@@ -253,6 +325,19 @@ ENDPOINTS.set('collab/workspace.invitations', async (ctx, principal, args) => {
   const { wsId, role } = requireWorkspaceAndRole(ctx, principal, requireString(args, 'workspaceId', 'collab/workspace.invitations'))
   const invitations = await ctx.collabWorkspaces.listInvitations(role, wsId)
   return collabOk(invitations.map(invitationView))
+})
+
+ENDPOINTS.set('collab/workspace.myInvitations', (ctx, principal) => {
+  const forMe = ctx.collabWorkspaces.listPendingForEmail(principal.email)
+  return collabOk<CollabInvitationForMeView[]>(
+    forMe.map(({ invitation, workspaceName }) => ({
+      id: invitation.id,
+      workspaceId: invitation.workspaceId,
+      workspaceName,
+      role: invitation.role,
+      createdAt: invitation.createdAt,
+    })),
+  )
 })
 
 ENDPOINTS.set('collab/workspace.revokeInvitation', async (ctx, principal, args) => {

@@ -83,6 +83,19 @@ describe('CollabApi', () => {
     await expect(api.deleteWorkspace('w1')).resolves.toBeUndefined()
   })
 
+  it('lists the pending invitations addressed to the user and joins by invitation id', async () => {
+    const mine = { id: 'i1', workspaceId: 'w1', workspaceName: 'Alpha', role: 'admin', createdAt: '2020-01-01T00:00:00.000Z' }
+    const joined = { id: 'w1', name: 'Alpha', memberCount: 2, isOwner: false, role: 'admin', createdAt: '2020-01-01T00:00:00.000Z' }
+    const { call, seen } = fakeCall([
+      { endpoint: 'collab/workspace.myInvitations', payload: {}, result: ok([mine]) },
+      { endpoint: 'collab/workspace.join', payload: { invitationId: 'i1' }, result: ok(joined) },
+    ])
+    const api = new CollabApi(call)
+    await expect(api.myInvitations()).resolves.toEqual([mine])
+    await expect(api.join('i1')).resolves.toEqual(joined)
+    expect(seen[1]!.payload).toEqual({ invitationId: 'i1' })
+  })
+
   it('folds an ok:false envelope into a CollabError carrying the wire code', async () => {
     const failing = vi.fn<CollabRpcChannel['call']>(async () => refusal('collab-forbidden'))
     const api = new CollabApi(failing)

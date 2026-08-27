@@ -724,6 +724,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'every invitation for the workspace, pending or otherwise.',
       },
       {
+        signature: 'listPendingForEmail(email: string): WorkspaceInvitationForEmail[]',
+        description: 'Every pending invitation addressed to an email (the acting user\'s own), each with the target workspace\'s name for the accept surface. A self query, so it takes no role: `delete` already removes a workspace\'s invitations, so a pending invitation always resolves a live workspace.',
+        parameters: [{ name: 'email', description: 'the acting user\'s verified email.' }],
+        returns: 'the pending-invitation accept facts for the addressed user.',
+      },
+      {
         signature: 'async revokeInvitation( actorWorkspaceRole: WorkspaceRole, workspaceId: WorkspaceId, invitationId: InvitationId, ): Promise<WorkspaceInvitation>',
         description: 'Revoke a pending invitation (idempotent).',
         parameters: [{ name: 'actorWorkspaceRole', description: 'the acting workspace role (needs `workspace.invite`).' }, { name: 'workspaceId', description: 'the target workspace.' }, { name: 'invitationId', description: 'the invitation to revoke.' }],
@@ -5339,6 +5345,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'WorkspaceInvitation',
     declaration: 'export interface WorkspaceInvitation {\n    id: InvitationId;\n    workspaceId: WorkspaceId;\n    email: string;\n    role: WorkspaceRole;\n    createdBy: UserId;\n    createdAt: string;\n    revoked: boolean;\n    usedAt?: string;\n}',
+  },
+  {
+    name: 'WorkspaceInvitationForEmail',
+    declaration: 'export interface WorkspaceInvitationForEmail {\n    invitation: WorkspaceInvitation;\n    workspaceName: string;\n}',
   },
   {
     name: 'WorkspaceMember',

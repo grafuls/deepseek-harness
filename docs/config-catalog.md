@@ -577,7 +577,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/collab/workspaces/src/index.ts:80`](../packages/collab/workspaces/src/index.ts)
+Source: [`packages/collab/workspaces/src/index.ts:87`](../packages/collab/workspaces/src/index.ts)
 
 <a id="deepseek-aidsh-compaction-basic"></a>
 

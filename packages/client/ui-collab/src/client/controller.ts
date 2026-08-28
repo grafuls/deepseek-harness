@@ -6,22 +6,10 @@
  * inject face exposes plain callback members over it.
  */
 
+import type { TranslateNS } from '@deepseek-ai/dsh-client-locale/client'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import { CollabError, type CollabApi, type CollabRole } from './contract.ts'
 import type { CollabWorkspacesState } from './store.ts'
-
-/** Join a wire code with a muted, user-facing banner. */
-function foldWireError(error: unknown): string {
-  if (error instanceof CollabError) {
-    switch (error.code) {
-      case 'collab-forbidden': return '没有权限执行此操作'
-      case 'collab-not-found': return '工作区不存在或已被删除'
-      case 'collab-bad-request': return '请求无效，请检查输入'
-      default: return '操作失败，请重试'
-    }
-  }
-  return '连接服务失败，请重试'
-}
 
 /** The runtime Workspace face the opener switches into a mounted collab workspace. */
 export interface WorkspacePort {
@@ -46,12 +34,29 @@ export class CollabWorkspacesController {
    * @param store - the shared workspaces snapshot store.
    * @param workspaces - the runtime Workspace face, used to switch the GUI
    *   into a mounted collab workspace.
+   * @param t - the `collab.ui` namespace translate, so error banners and
+   *   validation copy follow the GUI's active language.
    */
   constructor(
     private readonly api: CollabApi,
     private readonly store: SnapshotStore<CollabWorkspacesState>,
     private readonly workspaces: WorkspacePort,
+    private readonly t: TranslateNS<'collab.ui'>,
   ) {}
+
+  /** Join a wire code with the muted, locale-seated banner. */
+  private foldWireError(error: unknown): string {
+    if (error instanceof CollabError) {
+      switch (error.code) {
+        case 'collab-forbidden': return this.t('errorForbidden')
+        case 'collab-not-found': return this.t('errorNotFound')
+        case 'collab-bad-request': return this.t('errorBadRequest')
+        default: return this.t('errorFailed')
+      }
+    }
+    return this.t('errorUnreachable')
+  }
+
 
   /**
    * Open the panel.
@@ -90,7 +95,7 @@ export class CollabWorkspacesController {
       this.store.set({ ...this.store.getSnapshot(), working: false })
       return true
     } catch (error) {
-      this.store.set({ ...this.store.getSnapshot(), working: false, error: foldWireError(error) })
+      this.store.set({ ...this.store.getSnapshot(), working: false, error: this.foldWireError(error) })
       return false
     }
   }
@@ -197,7 +202,7 @@ export class CollabWorkspacesController {
       await this.select(joined.id)
       return joined
     } catch (error) {
-      this.store.set({ ...this.store.getSnapshot(), working: false, error: foldWireError(error) })
+      this.store.set({ ...this.store.getSnapshot(), working: false, error: this.foldWireError(error) })
       return undefined
     }
   }
@@ -232,7 +237,7 @@ export class CollabWorkspacesController {
       ])
       this.store.set({ ...this.store.getSnapshot(), members, invitations, working: false })
     } catch (error) {
-      this.store.set({ ...this.store.getSnapshot(), working: false, error: foldWireError(error) })
+      this.store.set({ ...this.store.getSnapshot(), working: false, error: this.foldWireError(error) })
     }
   }
 
@@ -244,7 +249,7 @@ export class CollabWorkspacesController {
   async create(name: string): Promise<string | undefined> {
     const trimmed = name.trim()
     if (trimmed === '') {
-      this.store.set({ ...this.store.getSnapshot(), error: '请输入工作区名称' })
+      this.store.set({ ...this.store.getSnapshot(), error: this.t('errorNameRequired') })
       return undefined
     }
     this.store.set({ ...this.store.getSnapshot(), working: true, error: undefined })
@@ -255,7 +260,7 @@ export class CollabWorkspacesController {
       await this.select(created.id)
       return created.id
     } catch (error) {
-      this.store.set({ ...this.store.getSnapshot(), working: false, error: foldWireError(error) })
+      this.store.set({ ...this.store.getSnapshot(), working: false, error: this.foldWireError(error) })
       return undefined
     }
   }
@@ -276,7 +281,7 @@ export class CollabWorkspacesController {
       this.store.set({ ...current, working: false, invitations: [...current.invitations, invitation] })
       return invitation
     } catch (error) {
-      this.store.set({ ...this.store.getSnapshot(), working: false, error: foldWireError(error) })
+      this.store.set({ ...this.store.getSnapshot(), working: false, error: this.foldWireError(error) })
       return undefined
     }
   }
@@ -300,7 +305,7 @@ export class CollabWorkspacesController {
       })
       return revoked
     } catch (error) {
-      this.store.set({ ...this.store.getSnapshot(), working: false, error: foldWireError(error) })
+      this.store.set({ ...this.store.getSnapshot(), working: false, error: this.foldWireError(error) })
       return undefined
     }
   }
@@ -325,7 +330,7 @@ export class CollabWorkspacesController {
       })
       return member
     } catch (error) {
-      this.store.set({ ...this.store.getSnapshot(), working: false, error: foldWireError(error) })
+      this.store.set({ ...this.store.getSnapshot(), working: false, error: this.foldWireError(error) })
       return undefined
     }
   }
@@ -345,7 +350,7 @@ export class CollabWorkspacesController {
       this.store.set({ ...current, working: false, members: current.members.filter(member => member.userId !== userId) })
       return true
     } catch (error) {
-      this.store.set({ ...this.store.getSnapshot(), working: false, error: foldWireError(error) })
+      this.store.set({ ...this.store.getSnapshot(), working: false, error: this.foldWireError(error) })
       return false
     }
   }
@@ -372,7 +377,7 @@ export class CollabWorkspacesController {
       })
       return true
     } catch (error) {
-      this.store.set({ ...this.store.getSnapshot(), working: false, error: foldWireError(error) })
+      this.store.set({ ...this.store.getSnapshot(), working: false, error: this.foldWireError(error) })
       return false
     }
   }

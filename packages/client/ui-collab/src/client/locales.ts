@@ -27,6 +27,12 @@ export const zh = {
   revoke: '撤销',
   remove: '移除',
   deleteWorkspace: '删除工作区',
+  errorForbidden: '没有权限执行此操作',
+  errorNotFound: '工作区不存在或已被删除',
+  errorBadRequest: '请求无效，请检查输入',
+  errorFailed: '操作失败，请重试',
+  errorUnreachable: '连接服务失败，请重试',
+  errorNameRequired: '请输入工作区名称',
 }
 
 /** English dictionary (same key set). */
@@ -53,6 +59,12 @@ export const en: Record<CollabKey, string> = {
   revoke: 'Revoke',
   remove: 'Remove',
   deleteWorkspace: 'Delete workspace',
+  errorForbidden: 'Action not permitted',
+  errorNotFound: 'This workspace no longer exists',
+  errorBadRequest: 'Invalid request, please check your input',
+  errorFailed: 'Something went wrong, please try again',
+  errorUnreachable: 'Could not reach the server, please try again',
+  errorNameRequired: 'Please enter a workspace name',
 }
 
 /** Union of this namespace's dictionary keys. */

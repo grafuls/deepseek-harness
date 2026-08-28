@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { CollabRpcResultError, CollabRpcResultOk } from '../src/client/contract.ts'
 import { CollabApi, type CollabRpcChannel, type CollabInvitationView, type CollabMemberView, type CollabWorkspaceView } from '../src/client/contract.ts'
 import { CollabWorkspacesController, type WorkspacePort } from '../src/client/controller.ts'
+import { zh, type CollabKey } from '../src/client/locales.ts'
 import { createCollabWorkspacesStore } from '../src/client/store.ts'
 
 const WORKSPACE: CollabWorkspaceView = { id: 'w1', name: 'Alpha', memberCount: 2, isOwner: true, role: 'admin', createdAt: '2020-01-01T00:00:00.000Z' }
@@ -31,6 +32,11 @@ function ok(value: unknown): CollabRpcResultOk<unknown> {
 
 function refusal(code: string): CollabRpcResultError {
   return { ok: false, error: { code, message: `boom: ${code}` } }
+}
+
+/** The controller consumes the locale translate; a zh-backed fake stands in for `ctx.locale.bind`. */
+function zhTranslate(key: string, _params?: Record<string, unknown>): string {
+  return zh[key as CollabKey] ?? key
 }
 
 /** One scripted call fake: each endpoint replays its response queue in order. */
@@ -82,7 +88,7 @@ function harness(
   const api = new CollabApi(call)
   const store = createCollabWorkspacesStore()
   const { port, push, startSession } = workspacePort(items)
-  const controller = new CollabWorkspacesController(api, store, port)
+  const controller = new CollabWorkspacesController(api, store, port, zhTranslate)
   return { store, controller, seen, push, startSession }
 }
 
@@ -178,7 +184,7 @@ describe('CollabWorkspacesController', () => {
     const { store, seen } = harness()
     const api = new CollabApi(async () => { throw new Error('transport failure') })
     const hiddenStore = createCollabWorkspacesStore()
-    const hidden = new CollabWorkspacesController(api, hiddenStore, workspacePort().port)
+    const hidden = new CollabWorkspacesController(api, hiddenStore, workspacePort().port, zhTranslate)
     await expect(hidden.refreshAvailability()).resolves.toBe('hidden')
     expect(store.getSnapshot().availability).toBe('checking')
     expect(hiddenStore.getSnapshot().availability).toBe('hidden')
@@ -350,6 +356,7 @@ describe('CollabWorkspacesController', () => {
       new CollabApi(async () => ok({})),
       createCollabWorkspacesStore(),
       workspacePort().port,
+      zhTranslate,
     )
     expect(await noop.deleteSelected()).toBe(false)
   })
@@ -434,7 +441,7 @@ describe('CollabWorkspacesController', () => {
     const api = new CollabApi(async () => { throw new Error('network down') })
     const failingStore = createCollabWorkspacesStore()
     failingStore.set({ ...selected().getSnapshot() })
-    const failing = new CollabWorkspacesController(api, failingStore, workspacePort().port)
+    const failing = new CollabWorkspacesController(api, failingStore, workspacePort().port, zhTranslate)
     await failing.removeMember('u1')
     expect(failingStore.getSnapshot().error).toBe('连接服务失败，请重试')
     expect(failingStore.getSnapshot().working).toBe(false)

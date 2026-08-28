@@ -9,7 +9,7 @@ Web GUI 的 collab 工作区管理器。这个浏览器插件列出已登录用�
 ## 挂载了什么
 
 - Node 半面（`src/index.ts`）：惰性——本包完全位于浏览器侧。
-- 浏览器半面（`src/client/`）：一个 `apply`，创建工作区 store 和基于 collab RPC 通道的控制器，然后注册两个槽条目。store hook 以 `useCollabWorkspaces` 注入 hook 的形式到达组件；动作（打开、关闭、打开管理器到某个工作区、把工作区打开进 GUI、刷新、选择、创建、邀请、撤销、接受、改角色、移除、删除）经由 inject 面透传。
+- 浏览器半面（`src/client/`）：一个 `apply`，创建工作区 store 和基于 collab RPC 通道的控制器，然后注册两个槽条目。store hook 以 `useCollabWorkspaces` 注入 hook 的形式到达组件；动作（打开、关闭、打开管理器到某个工作区、把工作区打开进 GUI、刷新、选择、创建、邀请、撤销、接受、改角色、移除、删除）经由 inject 面透传。所有产品文案——界面文案、错误横幅与校验提示——都位于标准 locale 座上的 `collab.ui` 词典，因此随 GUI 的「语言」设置切换。
 
 ## collab 面契约
 

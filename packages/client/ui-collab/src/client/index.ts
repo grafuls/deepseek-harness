@@ -47,7 +47,8 @@ export function apply(ctx: ClientContext): void {
   const connection = ctx.get('connection') as ConnectionHandle
   const api = new CollabApi(connection.rpc.call.bind(connection.rpc))
   const store = createCollabWorkspacesStore()
-  const controller = new CollabWorkspacesController(api, store, ctx.workspaces)
+  const t = ctx.locale.bind(NS)
+  const controller = new CollabWorkspacesController(api, store, ctx.workspaces, t)
   const injected = (): CollabWorkspacesInjected => ({
     hooks: { collabWorkspaces: store },
     actions: {

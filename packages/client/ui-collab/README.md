@@ -9,7 +9,7 @@ The plugin registers two entries, both composed out through slot declarators rat
 ## What it mounts
 
 - Node half (`src/index.ts`): inert — the package is entirely browser-side.
-- Browser half (`src/client/`): an `apply` that creates the workspaces store and a controller over the collab RPC channel, then registers the two slot entries. The store hook reaches components as the `useCollabWorkspaces` inject hook; the actions (open, close, open manager onto a workspace, open a workspace into the GUI, refresh, select, create, invite, revoke, accept, set role, remove, delete) are passed through the inject face.
+- Browser half (`src/client/`): an `apply` that creates the workspaces store and a controller over the collab RPC channel, then registers the two slot entries. The store hook reaches components as the `useCollabWorkspaces` inject hook; the actions (open, close, open manager onto a workspace, open a workspace into the GUI, refresh, select, create, invite, revoke, accept, set role, remove, delete) are passed through the inject face. Every product string — surface copy, error banners, and validation notices — lives in the `collab.ui` dictionary on the standard locale seat, so it follows the GUI's Language setting.
 
 ## The collab surface contract
 

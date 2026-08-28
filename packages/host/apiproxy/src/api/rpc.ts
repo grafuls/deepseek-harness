@@ -41,6 +41,12 @@ export interface RpcErrorDetailsMap {
   'workspace-invalid-path': { path: string }
   'workspace-name-conflict': { name: string }
   'workspace-move-invalid': { workspaceId: string; sessionId: SessionId; beforeSessionId?: SessionId }
+  /**
+   * The caller is not a member of the collab workspace a Host workspace or its
+   * sessions belong to; the Host plane serves collab-rooted workspaces only to
+   * their members (the multi-user overlay stages the decision).
+   */
+  'workspace-forbidden': { workspaceId: string }
   'directory-unreadable': { path: string }
   'directory-exists': { path: string }
   'directory-create-failed': { path: string }

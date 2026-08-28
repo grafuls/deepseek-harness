@@ -14,6 +14,7 @@ import { sessionTokenFromCookieHeader } from '@deepseek-ai/dsh-collab-auth'
 import type { ConnectionAuthenticatorFacts } from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { collabError } from './errors.ts'
+import { createCollabWorkspaceAccess } from './access-gate.ts'
 import { dispatchCollabEndpoint } from './dispatch.ts'
 import type { CollabPrincipalView } from './types.ts'
 
@@ -40,6 +41,11 @@ export const COLLAB_AUTH_SESSION_PATH = '/api/collab/auth/session'
 
 /** Plugin body: wire the auth fence, the collab RPC surface, and the HTTP routes. */
 export function apply(ctx: Context): void {
+  // Membership gate over the Host plane: collab-rooted workspaces and their
+  // sessions are served only to their members. The Host reads it structurally
+  // when present, so a single-user composition that omits this overlay never
+  // stages the decision.
+  ctx.effect(() => ctx.provide('collabWorkspaceAccess', createCollabWorkspaceAccess(ctx)))
   // Auth fence: every `/api` request requires a signed session cookie. The
   // gate contract lives in client-connection; here we only provide identity.
   ctx.effect(() => {

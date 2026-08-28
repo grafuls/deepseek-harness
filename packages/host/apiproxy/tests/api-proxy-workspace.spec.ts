@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, realpathSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { Inbox } from '@deepseek-ai/dsh-agent'
@@ -567,5 +567,346 @@ describe('Host Workspace increments', () => {
       error: { code: 'session-not-found', details: { sessionId: 'session-ghost' } },
     })
     abort.abort()
+  })
+})
+
+/**
+ * Frame collector over a push iterator. It keeps at most one in-flight
+ * `stream.next()` alive across calls: an idle window that yields no frame
+ * retains the pending read (never orphaned) so the next call reuses the same
+ * iterator and no queued frame is silently lost.
+ */
+function frameCollector<T>(stream: AsyncIterator<RpcRequest<T>>) {
+  let inflight: Promise<IteratorResult<RpcRequest<T>>> | undefined
+  const take = async (idleMs: number): Promise<T | undefined> => {
+    const current = inflight ?? (inflight = stream.next())
+    const raced = await Promise.race([
+      current.then(value => ({ value })),
+      new Promise<{ idle: true }>(resolve => setTimeout(() => { resolve({ idle: true }) }, idleMs)),
+    ])
+    if ('idle' in raced) return undefined
+    inflight = undefined
+    if (raced.value.done === true) return undefined
+    return raced.value.value.payload
+  }
+  /** Read up to `limit` frames, returning after an idle window when fewer arrive. */
+  return async (limit: number, idleMs = 80): Promise<T[]> => {
+    const frames: T[] = []
+    for (let i = 0; i < limit; i++) {
+      const frame = await take(idleMs)
+      if (frame === undefined) break
+      frames.push(frame)
+    }
+    return frames
+  }
+}
+
+/**
+ * The collab overlay staged over the Host plane: a membership gate plus a
+ * connection carrying a switchable principal, mirroring what dsh-collab-api
+ * provides to the real transport (the reactor keeps the principal in async
+ * context; here a mutable service seam stands in for it).
+ */
+async function collabHarness() {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh-apiproxy-collab-')))
+  const collabRoot = stageDir(root, 'collab')
+  mkdirSync(join(collabRoot, 'workspaces'), { recursive: true })
+  const membership = new Map<string, Set<string>>()
+  const principal: { current: unknown } = { current: undefined }
+  const collabAccess = {
+    collabRoot,
+    allow(actor: unknown, path: string): boolean {
+      const prefix = `${collabRoot}${sep}workspaces${sep}`
+      if (!path.startsWith(prefix)) return true
+      const wsId = path.slice(prefix.length).split(sep)[0] ?? ''
+      const userId = (actor as { userId?: string } | undefined)?.userId
+      if (userId === undefined) return false
+      return membership.get(wsId)?.has(userId) ?? false
+    },
+  }
+  // The gate lands after `createApiProxy` ran: the proxy reads both services
+  // from the live store on every decision, so this late provide (the real
+  // profile patch appends the collab row after the api-gateway row) must
+  // still take effect.
+  const host = await harness(root)
+  const { api, ctx } = host
+  ctx.provide('connection', { principal: () => principal.current } as never)
+  ctx.provide('collabWorkspaceAccess', collabAccess as never)
+  const withPrincipal = <T>(userId: string, run: () => T): T => {
+    const previous = principal.current
+    principal.current = { userId }
+    try {
+      return run()
+    } finally {
+      principal.current = previous
+    }
+  }
+  const member = (wsId: string, ...users: string[]): void => {
+    const usersSet = membership.get(wsId) ?? new Set<string>()
+    for (const user of users) usersSet.add(user)
+    membership.set(wsId, usersSet)
+  }
+  const stageCollab = (wsId: string): string => {
+    const path = join(collabRoot, 'workspaces', wsId)
+    mkdirSync(path, { recursive: true })
+    return path
+  }
+  return { api, ctx, root, withPrincipal, member, stageCollab, collabRoot }
+}
+
+const sessionInFiber = (ctx: Context, sessionId: SessionId, cwd: string | undefined) =>
+  ctx.plugin(Object.assign(
+    (inner: Context) => {
+      inner.sessions.create(sessionId, { meta: cwd === undefined ? {} : { cwd } })
+    },
+    { inject: ['sessions'] },
+  ))
+
+describe('collab workspace gating (multi-user host plane)', () => {
+  it('serves collab-rooted workspaces only to their members', async () => {
+    const h = await collabHarness()
+    h.member('alpha', 'owen', 'lina')
+    h.member('beta', 'owen')
+    const base = expectOk(await h.withPrincipal('owen', () =>
+      h.api.workspace.create(request({ path: stageDir(h.root, 'base') })))).workspace
+    const alpha = expectOk(await h.withPrincipal('owen', () =>
+      h.api.workspace.create(request({ path: h.stageCollab('alpha') })))).workspace
+    const beta = expectOk(await h.withPrincipal('owen', () =>
+      h.api.workspace.create(request({ path: h.stageCollab('beta') })))).workspace
+
+    const lina = expectOk(await h.withPrincipal('lina', () => h.api.workspace.list(request({}))))
+    expect(lina.items.map(workspace => workspace.workspaceId)).toEqual(expect.arrayContaining([
+      base.workspaceId, alpha.workspaceId,
+    ]))
+    expect(lina.items.map(workspace => workspace.workspaceId)).not.toContain(beta.workspaceId)
+
+    const owen = expectOk(await h.withPrincipal('owen', () => h.api.workspace.list(request({}))))
+    expect(owen.items.map(workspace => workspace.workspaceId)).toEqual(expect.arrayContaining([
+      base.workspaceId, alpha.workspaceId, beta.workspaceId,
+    ]))
+  })
+
+  it('refuses a non-member every workspace target and session entry point', async () => {
+    const h = await collabHarness()
+    h.member('alpha', 'owen', 'lina')
+    h.member('beta', 'owen')
+    await h.withPrincipal('owen', () =>
+      h.api.workspace.create(request({ path: h.stageCollab('alpha') })))
+    const beta = expectOk(await h.withPrincipal('owen', () =>
+      h.api.workspace.create(request({ path: h.stageCollab('beta') })))).workspace
+
+    const byId = await h.withPrincipal('lina', () =>
+      h.api.sessions.create(request({ workspaceId: beta.workspaceId, sessionId: SessionId('lina-to-beta') })))
+    expect(byId.result).toMatchObject({
+      ok: false, error: { code: 'workspace-forbidden', details: { workspaceId: beta.workspaceId } },
+    })
+    const byCwd = await h.withPrincipal('lina', () =>
+      h.api.sessions.create(request({ cwd: beta.path, sessionId: SessionId('lina-to-beta-cwd') })))
+    expect(byCwd.result).toMatchObject({
+      ok: false, error: { code: 'workspace-forbidden', details: { workspaceId: 'beta' } },
+    })
+    const mount = await h.withPrincipal('lina', () =>
+      h.api.workspace.create(request({ path: beta.path })))
+    expect(mount.result).toMatchObject({
+      ok: false, error: { code: 'workspace-forbidden', details: { workspaceId: 'beta' } },
+    })
+    const rename = await h.withPrincipal('lina', () =>
+      h.api.workspace.rename(request({ workspaceId: beta.workspaceId, title: 'grabbed' })))
+    expect(rename.result).toMatchObject({ ok: false, error: { code: 'workspace-forbidden' } })
+    const del = await h.withPrincipal('lina', () =>
+      h.api.workspace.delete(request({ workspaceId: beta.workspaceId })))
+    expect(del.result).toMatchObject({ ok: false, error: { code: 'workspace-forbidden' } })
+    const order = await h.withPrincipal('lina', () =>
+      h.api.workspace.insertBefore(request({ workspaceId: beta.workspaceId })))
+    expect(order.result).toMatchObject({ ok: false, error: { code: 'workspace-forbidden' } })
+    const move = await h.withPrincipal('lina', () =>
+      h.api.workspace.insertSessionBefore(request({
+        workspaceId: beta.workspaceId,
+        sessionId: SessionId('move-source'),
+        beforeSessionId: SessionId('move-anchor'),
+      })))
+    expect(move.result).toMatchObject({ ok: false, error: { code: 'workspace-forbidden' } })
+
+    const allowed = expectOk(await h.withPrincipal('owen', () =>
+      h.api.sessions.create(request({ workspaceId: beta.workspaceId, sessionId: SessionId('owen-in-beta') }))))
+    expect(allowed.sessionId).toBe('owen-in-beta')
+  })
+
+  it('scopes session enumeration and archived accounting to members', async () => {
+    const h = await collabHarness()
+    h.member('alpha', 'owen', 'lina')
+    h.member('beta', 'owen')
+    const alpha = expectOk(await h.withPrincipal('owen', () =>
+      h.api.workspace.create(request({ path: h.stageCollab('alpha') })))).workspace
+    const beta = expectOk(await h.withPrincipal('owen', () =>
+      h.api.workspace.create(request({ path: h.stageCollab('beta') })))).workspace
+    const linaSession = SessionId('lina-in-alpha')
+    const owenSession = SessionId('owen-in-beta')
+    await h.withPrincipal('lina', () =>
+      h.api.sessions.create(request({ workspaceId: alpha.workspaceId, sessionId: linaSession })))
+    await h.withPrincipal('owen', () =>
+      h.api.sessions.create(request({ workspaceId: beta.workspaceId, sessionId: owenSession })))
+    // A cwd-less session has no working directory; the gate grants it (no collab
+    // boundary applies) rather than hiding an ordinary host session.
+    const cwdlessFiber = await sessionInFiber(h.ctx, SessionId('session-cwd-less'), undefined)
+    const linaList = expectOk(await h.withPrincipal('lina', () => h.api.sessions.list(request({}))))
+    const listed = linaList.items.map(item => item.sessionId)
+    expect(listed).toContain(linaSession)
+    expect(listed).not.toContain(owenSession)
+    expect(listed).toContain('session-cwd-less')
+
+    // Archived ids resolve cwd through the attached session store.
+    await h.withPrincipal('owen', () =>
+      h.api.workspace.archiveSession(request({ sessionId: owenSession })))
+    await h.withPrincipal('lina', () =>
+      h.api.workspace.archiveSession(request({ sessionId: linaSession })))
+    const linaArchived = expectOk(await h.withPrincipal('lina', () => h.api.workspace.list(request({}))))
+    expect(linaArchived.archivedSessionIds).toContain(linaSession)
+    expect(linaArchived.archivedSessionIds).not.toContain(owenSession)
+    const owenArchived = expectOk(await h.withPrincipal('owen', () => h.api.workspace.list(request({}))))
+    expect(owenArchived.archivedSessionIds).toContain(owenSession)
+    await cwdlessFiber.dispose()
+  })
+
+  it('scopes the host stream to the connection collab visibility', async () => {
+    const h = await collabHarness()
+    h.member('alpha', 'owen', 'lina')
+    h.member('beta', 'owen')
+    h.member('gamma', 'owen')
+    await h.withPrincipal('owen', () =>
+      h.api.workspace.create(request({ path: stageDir(h.root, 'base') })))
+    const alpha = expectOk(await h.withPrincipal('owen', () =>
+      h.api.workspace.create(request({ path: h.stageCollab('alpha') })))).workspace
+    const beta = expectOk(await h.withPrincipal('owen', () =>
+      h.api.workspace.create(request({ path: h.stageCollab('beta') })))).workspace
+
+    const abort = new AbortController()
+    const stream = h.withPrincipal('lina', () =>
+      h.api.events.host(request({}), abort.signal))[Symbol.asyncIterator]()
+    const read = frameCollector(stream)
+
+    // A collab workspace mounted after the stream opened for a non-member is
+    // never framed; a plain host workspace at the same time IS.
+    await h.withPrincipal('owen', () =>
+      h.api.workspace.create(request({ path: h.stageCollab('gamma') })))
+    expect((await read(1)).filter(frame =>
+      frame.type === 'host/workspace-changed' && frame.workspace.workspaceId === 'gamma' as WorkspaceId))
+      .toEqual([])
+    const base2 = expectOk(await h.withPrincipal('owen', () =>
+      h.api.workspace.create(request({ path: stageDir(h.root, 'base-2') })))).workspace
+    expect((await read(2)).some(frame =>
+      frame.type === 'host/workspace-changed' && frame.workspace.workspaceId === base2.workspaceId)).toBe(true)
+
+    // A reorder among the viewer's visible workspaces emits a scoped order frame.
+    const base = expectOk(await h.api.workspace.list(request({})))
+      .items.find(item => item.title === 'base')
+    expect(base).toBeDefined()
+    expectOk(await h.withPrincipal('lina', () =>
+      h.api.workspace.insertBefore(request({
+        workspaceId: base!.workspaceId,
+        beforeWorkspaceId: alpha.workspaceId,
+      }))))
+    const orderFrame = (await read(2)).find(frame => frame.type === 'host/workspace-order-changed')
+    expect(orderFrame).toBeDefined()
+    const orderedIds = (orderFrame as { workspaceIds: WorkspaceId[] }).workspaceIds
+    expect(orderedIds).toContain(alpha.workspaceId)
+    expect(orderedIds).toContain(base!.workspaceId)
+    expect(orderedIds).not.toContain(beta.workspaceId)
+    expect(orderedIds).not.toContain('gamma' as WorkspaceId)
+    expect(orderedIds.indexOf(base!.workspaceId)).toBeLessThan(orderedIds.indexOf(alpha.workspaceId))
+
+    // Session increments: the hidden collab session is skipped, the visible one framed.
+    await h.withPrincipal('owen', () =>
+      h.api.sessions.create(request({ workspaceId: beta.workspaceId, sessionId: SessionId('owen-hidden-beta') })))
+    await h.withPrincipal('lina', () =>
+      h.api.sessions.create(request({ workspaceId: alpha.workspaceId, sessionId: SessionId('lina-visible-alpha') })))
+    const sessionFrames = await read(3)
+    expect(sessionFrames.some(frame =>
+      frame.type === 'host/session-added' && frame.sessionId === 'lina-visible-alpha'
+      && frame.blank && frame.cwd === alpha.path)).toBe(true)
+    expect(sessionFrames.filter(frame =>
+      frame.type === 'host/session-added' && frame.sessionId === 'owen-hidden-beta')).toEqual([])
+
+    // Status and error frames follow the same visibility rule.
+    const hiddenAgent = h.ctx.agents.get(SessionId('owen-hidden-beta'))
+    const visibleAgent = h.ctx.agents.get(SessionId('lina-visible-alpha'))
+    expect(hiddenAgent).toBeDefined()
+    expect(visibleAgent).toBeDefined()
+    h.ctx.emit('agent/status', { agent: hiddenAgent!, status: 'running' })
+    h.ctx.emit('agent/error', { agent: hiddenAgent!, turn: 0, step: 0, error: new Error('boom') })
+    h.ctx.emit('agent/status', { agent: visibleAgent!, status: 'running' })
+    h.ctx.emit('agent/error', { agent: visibleAgent!, turn: 0, step: 0, error: new Error('visible boom') })
+    const statusFrames = await read(2)
+    expect(statusFrames.some(frame =>
+      frame.type === 'host/session-status' && frame.sessionId === 'lina-visible-alpha' && frame.running)).toBe(true)
+    expect(statusFrames.some(frame =>
+      frame.type === 'host/agent-error' && frame.sessionId === 'lina-visible-alpha')).toBe(true)
+    expect(statusFrames.filter(frame =>
+      (frame.type === 'host/session-status' || frame.type === 'host/agent-error')
+      && frame.sessionId === 'owen-hidden-beta')).toEqual([])
+
+    abort.abort()
+  })
+
+  it('scopes the mux stream conversation frames to the connection collab visibility', async () => {
+    const h = await collabHarness()
+    h.member('alpha', 'owen', 'lina')
+    h.member('beta', 'owen')
+    const alpha = expectOk(await h.withPrincipal('owen', () =>
+      h.api.workspace.create(request({ path: h.stageCollab('alpha') })))).workspace
+    const beta = expectOk(await h.withPrincipal('owen', () =>
+      h.api.workspace.create(request({ path: h.stageCollab('beta') })))).workspace
+
+    // Hidden session exists before the stream opens: the baseline subscribe
+    // frame for it is withheld, and its live events never reach the viewer.
+    await h.withPrincipal('owen', () =>
+      h.api.sessions.create(request({ workspaceId: beta.workspaceId, sessionId: SessionId('owen-hidden-beta') })))
+    await h.withPrincipal('lina', () =>
+      h.api.sessions.create(request({ workspaceId: alpha.workspaceId, sessionId: SessionId('lina-visible-alpha') })))
+    const abort = new AbortController()
+    const stream = h.withPrincipal('lina', () =>
+      h.api.events.mux(request({}), abort.signal))[Symbol.asyncIterator]()
+    const read = frameCollector(stream)
+    const baseline = await read(2)
+    expect(baseline.some(frame =>
+      frame.type === 'session/subscribed' && frame.sessionId === 'lina-visible-alpha')).toBe(true)
+    expect(baseline.filter(frame =>
+      frame.type === 'session/subscribed' && frame.sessionId === 'owen-hidden-beta')).toEqual([])
+
+    const hiddenAgent = h.ctx.agents.get(SessionId('owen-hidden-beta'))
+    const visibleAgent = h.ctx.agents.get(SessionId('lina-visible-alpha'))
+    expect(hiddenAgent).toBeDefined()
+    expect(visibleAgent).toBeDefined()
+    hiddenAgent!.session.append('turn/start', { turn: 1 })
+    visibleAgent!.session.append('turn/start', { turn: 1 })
+    const events = await read(2)
+    expect(events.some(frame =>
+      frame.type === 'session/event' && frame.sessionId === 'lina-visible-alpha')).toBe(true)
+    expect(events.filter(frame =>
+      frame.type === 'session/event' && frame.sessionId === 'owen-hidden-beta')).toEqual([])
+
+    // A session born after the stream opened gets a subscribe frame only when
+    // its viewer may see it.
+    await h.withPrincipal('owen', () =>
+      h.api.sessions.create(request({ workspaceId: beta.workspaceId, sessionId: SessionId('owen-late-beta') })))
+    await h.withPrincipal('lina', () =>
+      h.api.sessions.create(request({ workspaceId: alpha.workspaceId, sessionId: SessionId('lina-late-alpha') })))
+    const late = await read(2)
+    expect(late.some(frame =>
+      frame.type === 'session/subscribed' && frame.sessionId === 'lina-late-alpha')).toBe(true)
+    expect(late.filter(frame =>
+      frame.type === 'session/subscribed' && frame.sessionId === 'owen-late-beta')).toEqual([])
+    abort.abort()
+  })
+
+  it('leaves the host plane un-scoped when no principal is resolved', async () => {
+    const h = await collabHarness()
+    h.member('beta', 'owen')
+    const beta = expectOk(await h.withPrincipal('owen', () =>
+      h.api.workspace.create(request({ path: h.stageCollab('beta') })))).workspace
+    // No withPrincipal wrapper: the connection resolves no principal, which is
+    // the single-user posture this overlay never co-exists with.
+    const list = expectOk(await h.api.workspace.list(request({})))
+    expect(list.items.map(workspace => workspace.workspaceId)).toContain(beta.workspaceId)
   })
 })

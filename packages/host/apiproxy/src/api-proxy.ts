@@ -6,7 +6,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname } from 'node:path'
+import { basename, dirname } from 'node:path'
 import { z as zod } from 'zod'
 import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
@@ -1121,6 +1121,37 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     return selection
   }
 
+  /** Structural face the collab overlay stages over the Host plane. */
+  interface CollabWorkspaceAccessLike {
+    readonly collabRoot: string
+    allow(principal: unknown, path: string): boolean
+  }
+  /** Live gate read on every decision: the overlay and the proxy may compose in either mount order. */
+  const readCollabAccess = (): CollabWorkspaceAccessLike | undefined => (
+    ctx.get('collabWorkspaceAccess', false) as CollabWorkspaceAccessLike | undefined
+  )
+  /** Principal of the connection being served (async-local), or undefined in a single-user composition. */
+  const readPrincipal = (): unknown => (
+    (ctx.get('connection', false) as { principal(): unknown } | undefined)?.principal()
+  )
+  /**
+   * Whether `principal` may see and use a workspace directory or a session cwd.
+   * Without the collab overlay or without a resolved principal the Host plane
+   * stays un-scoped, which is the single-user default.
+   */
+  const viewablePathFor = (principal: unknown, path: string | undefined): boolean => {
+    const collabAccess = readCollabAccess()
+    if (collabAccess === undefined || principal === undefined || path === undefined) return true
+    return collabAccess.allow(principal, path)
+  }
+  /** Wire-safe refusal for a collab workspace the caller does not belong to. */
+  const workspaceForbidden = <T>(request: RpcRequest<unknown>, workspaceId: string): RpcResponse<T> =>
+    err(request, {
+      code: 'workspace-forbidden',
+      message: 'collab: you are not a member of this workspace',
+      details: { workspaceId },
+    })
+
   /** Pre-publication setup used by both fresh and resumed Web agents. */
   function installSelection(agentCtx: Context): void {
     const agent = agentCtx.agent
@@ -1665,6 +1696,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
    */
   async function listVisibleSessionSummaries(signal?: AbortSignal): Promise<SessionSummary[]> {
     signal?.throwIfAborted()
+    const principal = readPrincipal()
     const summarizeAttached = (session: Session): SessionSummary => {
       const agent = ctx.agents.get(session.id)
       const projections = listProjectionsFor(ctx, session.header, session)
@@ -1721,8 +1753,15 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         items.push(...summaries)
       }
     }
-    items.sort((a, b) => b.updatedAt - a.updatedAt)
-    return items
+    // Collab-rooted sessions are confirmed to their members at the same point
+    // list and search consume them, so both surfaces and the search id set
+    // agree on one visibility boundary.
+    const scoped = readCollabAccess() !== undefined && principal !== undefined
+    const itemsFor = scoped
+      ? items.filter(summary => viewablePathFor(principal, summary.cwd))
+      : items
+    itemsFor.sort((a, b) => b.updatedAt - a.updatedAt)
+    return itemsFor
   }
 
   /**
@@ -2088,8 +2127,17 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
               details: { workspaceId: request.payload.workspaceId },
             })
           }
+          if (!viewablePathFor(readPrincipal(), workspace.path)) {
+            return workspaceForbidden(request, request.payload.workspaceId)
+          }
         }
         const cwd = workspace?.path ?? request.payload.cwd ?? defaults.cwd
+        // A workspace-bound call is gated above by membership; a caller that
+        // names a collab data directory directly as `cwd` (or falls back into
+        // one) must not bypass the same rule.
+        if (!viewablePathFor(readPrincipal(), cwd)) {
+          return workspaceForbidden(request, basename(cwd))
+        }
         const requestedPreset = request.payload.agentPreset
         try {
           await ensureSession(sessionId, cwd, request.payload.sessionId !== undefined, requestedPreset)
@@ -2155,6 +2203,15 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         const { sessionId, beforeSeq, maxMessages } = request.payload
         try {
           const source = await historySourceFor(sessionId)
+          // A collab session is read-only to its members; a non-member must
+          // not confirm the session's existence by the code it receives.
+          if (!viewablePathFor(readPrincipal(), sourceSession(source).header.cwd)) {
+            return err(request, {
+              code: 'session-not-found',
+              message: `session "${sessionId}" not found`,
+              details: { sessionId },
+            })
+          }
           // Both awaits happen BEFORE the cut. Ensuring the recorded
           // composition's standing mount is what registers its projection
           // units, so a first cold read would otherwise serve a baseline
@@ -2273,6 +2330,13 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             code: 'internal',
             message: `fork source unavailable for session "${sessionId}": ${String(error)}`,
             details: {},
+          })
+        }
+        if (!viewablePathFor(readPrincipal(), source.header.cwd)) {
+          return err(request, {
+            code: 'session-not-found',
+            message: `session "${sessionId}" not found`,
+            details: { sessionId },
           })
         }
         const events = source.events
@@ -2701,14 +2765,29 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
 
     workspace: {
       list(request) {
+        const principal = readPrincipal()
+        const visible = (workspace: Workspace): boolean => viewablePathFor(principal, workspace.path)
+        // Archived ids resolve cwd through the in-memory session store; cold
+        // archived sessions (id only, no cwd here) stay listed, while their
+        // conversation data is still gated by `sessions.list`/`sessions.search`.
+        const visibleArchived = (sessionId: SessionId): boolean => {
+          const cwd = ctx.sessions.get(sessionId)?.header.cwd
+          return viewablePathFor(principal, cwd)
+        }
         return Promise.resolve(ok(request, {
-          items: ctx.workspaceRegistry.list().map(workspaceView),
-          archivedSessionIds: [...ctx.workspaceRegistry.archivedSessionIds],
+          items: ctx.workspaceRegistry.list().filter(visible).map(workspaceView),
+          archivedSessionIds: [...ctx.workspaceRegistry.archivedSessionIds].filter(visibleArchived),
         }))
       },
 
       async create(request) {
         const { path } = request.payload
+        // A collab data directory can only become a Host workspace through the
+        // membership-gated `workspace.open` path; a direct host `create` at a
+        // hidden collab path would otherwise remount it for every viewer.
+        if (!viewablePathFor(readPrincipal(), path)) {
+          return workspaceForbidden(request, basename(path))
+        }
         try {
           const { workspace, created } = await ensureWorkspace(path)
           return ok(request, { workspace: workspaceView(workspace), created })
@@ -2728,6 +2807,9 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         const { payload } = request
         const workspace = ctx.workspaceRegistry.get(brandWorkspaceId(payload.workspaceId))
         if (workspace === undefined) return workspaceNotFound(request, payload.workspaceId)
+        if (!viewablePathFor(readPrincipal(), workspace.path)) {
+          return workspaceForbidden(request, payload.workspaceId)
+        }
         const title = payload.title.trim()
         // Uniqueness AND the same-title no-op both ride the create chain so
         // they observe the state left by earlier queued renames — checked
@@ -2758,6 +2840,11 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
 
       async delete(request) {
         const { workspaceId } = request.payload
+        const workspace = ctx.workspaceRegistry.get(brandWorkspaceId(workspaceId))
+        if (workspace === undefined) return workspaceNotFound(request, workspaceId)
+        if (!viewablePathFor(readPrincipal(), workspace.path)) {
+          return workspaceForbidden(request, workspaceId)
+        }
         const operation = workspaceCreationChain.then(() =>
           ctx.workspaceRegistry.delete(brandWorkspaceId(workspaceId)))
         workspaceCreationChain = operation.then(() => undefined, () => undefined)
@@ -2767,6 +2854,10 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
 
       async insertBefore(request) {
         const { workspaceId, beforeWorkspaceId } = request.payload
+        const workspace = ctx.workspaceRegistry.get(brandWorkspaceId(workspaceId))
+        if (workspace !== undefined && !viewablePathFor(readPrincipal(), workspace.path)) {
+          return workspaceForbidden(request, workspaceId)
+        }
         try {
           const workspaceIds = await ctx.workspaceRegistry.insertBefore(
             brandWorkspaceId(workspaceId),
@@ -2783,6 +2874,9 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         const { payload } = request
         const workspace = ctx.workspaceRegistry.get(brandWorkspaceId(payload.workspaceId))
         if (workspace === undefined) return workspaceNotFound(request, payload.workspaceId)
+        if (!viewablePathFor(readPrincipal(), workspace.path)) {
+          return workspaceForbidden(request, payload.workspaceId)
+        }
         try {
           await workspace.insertSessionBefore(payload.sessionId, payload.beforeSessionId)
         } catch (error: unknown) {
@@ -3326,9 +3420,16 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
 
     events: {
       mux(_request, signal) {
+        // See `host()`: the connection's principal is fixed for the life of
+        // the stream, captured at open, and the conversation frames (session
+        // existence and live events) are scoped to it so a non-member never
+        // receives another collab workspace's live conversation.
+        const owner = readPrincipal()
+        const viewable = (session: Session): boolean => viewablePathFor(owner, session.header.cwd)
         const queue = new FrameQueue<RpcRequest<MuxFrame>>()
         muxQueues.add(queue)
         for (const session of ctx.sessions.list()) {
+          if (!viewable(session)) continue
           subscribeSession(queue, session)
         }
         for (const pending of pendingQuestions.values()) {
@@ -3371,6 +3472,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         const openCalls = new Map<SessionId, Map<string, { name: string; args: unknown }>>()
         const disposers = [
           ctx.on('session/event', (session: Session, event: SessionEvent) => {
+            if (!viewable(session)) return
             if (event.type === 'tool/call') {
               const data = event.data as ToolCallData
               try {
@@ -3391,6 +3493,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             queue.push(frame({ type: 'session/event', sessionId: session.id, event, ...view === undefined ? {} : { view } }))
           }),
           ctx.on('session/created', (session: Session) => {
+            if (!viewable(session)) return
             subscribeSession(queue, session)
             // The subscribe frame clears the client's task mirror, and a
             // session born after the stream opened missed the baseline loop.
@@ -3430,8 +3533,13 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       },
 
       host(_request, signal) {
+        // The stream belongs to one connection whose principal is fixed for
+        // its lifetime, so capture it once at open (the WS upgrade runs inside
+        // the principal's async context) and scope every frame to it.
+        const owner = readPrincipal()
+        const gate = (path: string | undefined): boolean => viewablePathFor(owner, path)
         const queue = new FrameQueue<RpcRequest<HostFrame>>()
-        const committedWorkspaces = ctx.workspaceRegistry.list()
+        const committedWorkspaces = ctx.workspaceRegistry.list().filter(workspace => gate(workspace.path))
         const committedWorkspaceIds = new Set(
           committedWorkspaces.map(workspace => String(workspace.id)),
         )
@@ -3442,6 +3550,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         let archivedSessionIds = ctx.workspaceRegistry.archivedSessionIds
         const disposers = [
           ctx.on('session/created', (session: Session) => {
+            if (!gate(session.header.cwd)) return
             queue.push(frame({
               type: 'host/session-added',
               sessionId: session.id,
@@ -3453,12 +3562,15 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             }))
           }),
           ctx.on('session/disposed', (session: Session) => {
+            if (!gate(session.header.cwd)) return
             queue.push(frame({ type: 'host/session-removed', sessionId: session.id }))
           }),
           ctx.on('agent/status', ({ agent, status }: { agent: Agent; status: AgentStatus }) => {
+            if (!gate(agent.session.header.cwd)) return
             queue.push(frame({ type: 'host/session-status', sessionId: agent.id, running: status === 'running' }))
           }),
           ctx.on('agent/error', ({ agent, error }: { agent: Agent; error: unknown }) => {
+            if (!gate(agent.session.header.cwd)) return
             queue.push(frame({ type: 'host/agent-error', sessionId: agent.id, message: errorChain(error) }))
           }),
           ctx.on('domain/changed', (change) => {
@@ -3466,28 +3578,39 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             if (change.table === '') {
               if (change.operation !== 'put') return
               const state = workspaceDomainState.parse(change.value)
-              const orderChanged = state.workspaceIds.length === committedWorkspaceOrder.length
-                && state.workspaceIds.every(workspaceId => committedWorkspaceIds.has(String(workspaceId)))
-                && state.workspaceIds.some((workspaceId, index) => workspaceId !== committedWorkspaceOrder[index])
+              const previousOrder = committedWorkspaceOrder
               for (const workspaceId of state.workspaceIds) {
                 if (committedWorkspaceIds.has(workspaceId)) continue
                 const workspace = ctx.workspaceRegistry.get(workspaceId)
                 if (workspace === undefined) {
                   throw new Error(`committed workspace registry references missing workspace "${workspaceId}"`)
                 }
+                // A collab workspace the viewer does not belong to is never
+                // added to its baseline or framed at all.
+                if (!gate(workspace.path)) continue
                 committedWorkspaceIds.add(workspaceId)
                 queue.push(frame({ type: 'host/workspace-changed', workspace: workspaceView(workspace) }))
               }
-              committedWorkspaceOrder = [...state.workspaceIds]
-              if (orderChanged) {
+              // The viewer's order projection is computed after the commit loop
+              // (so a workspace mounted by this event is already committed), then
+              // compared against the projection the previous state produced.
+              const nextOrder = state.workspaceIds.filter(
+                workspaceId => committedWorkspaceIds.has(String(workspaceId)),
+              )
+              committedWorkspaceOrder = nextOrder
+              if (nextOrder.length === previousOrder.length
+                && nextOrder.some((workspaceId, index) => workspaceId !== previousOrder[index])) {
                 queue.push(frame({
                   type: 'host/workspace-order-changed',
-                  workspaceIds: [...state.workspaceIds],
+                  workspaceIds: [...nextOrder],
                 }))
               }
               if (state.archivedSessionIds.length !== archivedSessionIds.length
                 || state.archivedSessionIds.some((id, index) => id !== archivedSessionIds[index])) {
                 archivedSessionIds = state.archivedSessionIds
+                // The live echo mirrors the id set; the archived session list
+                // surfaces are collab-scoped elsewhere (`workspace.list` and
+                // `sessions.list`), so id strings hold no conversation here.
                 queue.push(frame({
                   type: 'host/archived-sessions-changed',
                   archivedSessionIds: [...state.archivedSessionIds],

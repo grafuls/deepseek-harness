@@ -38,12 +38,16 @@ Collab API 网关：一个函数插件，把共享的 harness 进程转变为 Go
 | `collab/workspace.delete` | 删除 workspace；仅 workspace 所有者 |
 | `collab/workspace.setMemberRole` | 修改成员角色；仅 workspace 管理员 |
 | `collab/workspace.removeMember` | 移除成员；仅 workspace 管理员 |
-| `collab/workspace.open` | 把 collab 工作区挂载为保留数据目录之上的真实主机工作区（成员即可打开）；主机注册表为每个成员解析到同一个工作区 |
+| `collab/workspace.open` | 把 collab 工作区挂载为保留数据目录之上的真实主机工作区（成员即可打开）；主机注册表为每个成员解析到同一个工作区，且 Host 平面只为成员提供它及其会话 |
 | `collab/users.list` | 账号名册；仅实例管理员 |
 | `collab/users.setGlobalRole` | 提升/降级账号（`admin`/`member`）；仅实例管理员 |
 | `collab/users.setDisabled` | 禁用/启用账号；仅实例管理员 |
 
 错误折叠到封闭的 `RpcError` 代码集：授权拒绝（服务 RBAC）为 `collab-forbidden`，未知 workspace 为 `collab-not-found`，畸形的线上字段或其他服务失败为 `collab-bad-request`，缺少主机服务（组合中没有工作区注册表）为 `collab-internal`，重新断言与另一个主机工作区标题冲突的 collab 名称为 `collab-name-conflict`。每个端点在线上边界完成校验，然后委托给所属服务，由服务负责持久化与 RBAC。
+
+## Host 平面按成员资格划定作用域
+
+collab 装配体还为 Host 工作区平面挂载了成员资格决策。在每次请求以及每条 `host()`/`mux()` 流打开时，Host 代理解析连接主体并咨询 collab 成员资格门：collab 根目录下的 Host 工作区（以及绑定在其中的会话）只对该工作区的成员列出、推送与可达，非成员指向隐藏 collab 目录的 Host 调用会被携带工作区 id 的 host 自有错误 `workspace-forbidden` 拒绝。普通 Host 工作区对每个已认证调用者依旧可见。门从服务存储实时读取，因此省略该覆盖层的单用户组合会让 Host 平面逐字节不变，而成员资格变更自下一次请求或新流起生效。
 
 ## 配置
 
@@ -82,4 +86,6 @@ The package contributes nothing to model requests, so it cannot invalidate cache
 - **认证路由在 localhost 上绕过 JSON-RPC 围栏** —— login、callback、session、logout 四条精确路由在 `/api` 前缀路由之前应答，因此不携带信任围栏或信封检查。这对回环开发绑定上的 OIDC 流程可以接受；非回环部署必须在前端架设 TLS，并让 `baseUrl`/`redirectUri` 指向 IdP 实际重定向返回的公开主机。
 - **回调路径必须与 `collabAuth.redirectUri` 一致** —— 回调路由由重定向 URI 的 pathname 推导而来，因此不一致的 `redirectUri` 会使登录直接失败，而非静默错指。
 - **单一进程会话平面，按 workspace 绑定会话** —— 认证与活动会话位于进程平面（浏览器持有一个会话 Cookie），因此 collab workspace 没有自己的登录；打开一个 workspace 会将其挂载为真实 Host workspace，成员在其中启动的会话被绑定到共享的 `$DSH_HOME/.../collab/workspaces/<wsId>` 数据目录。
+- **两条实时回显携带隐藏会话 id 但不携带会话内容** —— `host()` 的归档会话回显与 `mux()` 的任务/队列/问题基线是进程全局的，因此仍会携带调用者看不见的 collab 会话的工作区 id、会话 id 或任务状态；它们不携带任何会话内容，而枚举表面（`workspace.list`、`sessions.list`/`search`、`history`、`fork`）已被完全划定作用域。
+- **成员资格在请求时与流打开时取样** —— `host()`/`mux()` 流在打开时捕获的主体在该流生命周期内保持不变，因此成员资格的授予或撤销作用于新的请求与新的流，而不是已经推送的帧。
 - **`loader.await()` 不代表 collab 表面已就绪** —— 依赖方的激活在树报告加载完成之后还有一个 tick 才落定，因此就绪消费者应先探测 `/api/collab/auth/session` 再发起请求（真实组合测试正是这么做的）。

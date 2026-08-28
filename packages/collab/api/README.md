@@ -38,12 +38,16 @@ The `collab/*` endpoints ride the shared `/api` channel with the standard JSON-R
 | `collab/workspace.delete` | delete a workspace; workspace-owner only |
 | `collab/workspace.setMemberRole` | change a member's role; workspace-admin only |
 | `collab/workspace.removeMember` | remove a member; workspace-admin only |
-| `collab/workspace.open` | mount a collab workspace as a real Host workspace over its reserved data directory (a member may open it); the Host registry resolves the same workspace for every member |
+| `collab/workspace.open` | mount a collab workspace as a real Host workspace over its reserved data directory (a member may open it); the Host registry resolves the same workspace for every member, and the Host plane serves it and its sessions only to members |
 | `collab/users.list` | account roster; instance-admin only |
 | `collab/users.setGlobalRole` | promote/demote an account (`admin`/`member`); instance-admin only |
 | `collab/users.setDisabled` | disable/enable an account; instance-admin only |
 
 Errors fold to a closed `RpcError` code set: `collab-forbidden` for authorization denials (service RBAC), `collab-not-found` for unknown workspaces, `collab-bad-request` for malformed wire fields or other service failures, `collab-internal` for a missing host service (the workspace registry is absent from the composition), and `collab-name-conflict` when re-asserting a collab name that collides with another Host workspace title. Every endpoint is validated at the wire boundary, then delegated to the owning service, which owns persistence and RBAC.
+
+## Host plane membership scoping
+
+The collab assembly also stages the membership decision for the Host workspace plane. On every request and at the open of a `host()`/`mux()` stream, the Host proxy resolves the connection principal and consults the collab membership gate: a collab-rooted Host workspace (and the sessions bound inside it) is listed, streamed, and reachable only to that workspace's members, and a non-member's Host call that targets a hidden collab directory is refused with the host-owned `workspace-forbidden` error carrying the workspace id. Plain Host workspaces stay visible to every authenticated caller. The gate is read live from the service store, so a single-user composition that omits this overlay keeps the Host plane byte-identical, and a membership change takes effect from the next request or new stream.
 
 ## Configuration
 
@@ -82,4 +86,6 @@ The package contributes nothing to model requests, so it cannot invalidate cache
 - **Auth routes bypass the JSON-RPC fence on localhost** — the login, callback, session, and logout exact routes answer before the `/api` prefix route, so they do not carry the trust-fence or envelope checks. This is acceptable for an OIDC flow over a loopback development bind; a non-loopback deployment must front the process with TLS and keep `baseUrl`/`redirectUri` on the public host the IdP redirects to.
 - **Callback path must match `collabAuth.redirectUri`** — the callback route is derived from the redirect URI's pathname, so an inconsistent `redirectUri` breaks sign-in rather than silently mis-directing it.
 - **One process session plane, per-workspace session binding** — authentication and active sessions live in the process plane (the browser holds one session cookie), so a collab workspace hosts no login of its own; opening a workspace mounts it as a real Host workspace, and the sessions a member starts inside it are bound to the shared `$DSH_HOME/.../collab/workspaces/<wsId>` data directory.
+- **Two live echoes carry hidden session ids without conversation** — the `host()` archived-sessions echo and the `mux()` task/queue/question baselines are process-global, so they still carry workspace ids, session ids, or task state for collab sessions a caller cannot see; they carry no conversation content, and the enumerated surfaces (`workspace.list`, `sessions.list`/`search`, `history`, `fork`) are fully scoped.
+- **Membership is sampled at request time and at stream open** — the principal a `host()`/`mux()` stream captured when it opened stays fixed for that stream's life, so a membership grant or revocation applies to new requests and new streams, not to frames already in flight.
 - **`loader.await()` does not imply the collab surface is ready** — dependent activation settles a tick after the tree reports loaded, so a readiness consumer should probe `/api/collab/auth/session` before issuing requests (the real-composition test does exactly this).

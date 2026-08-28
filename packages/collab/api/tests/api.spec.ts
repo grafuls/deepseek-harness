@@ -6,7 +6,7 @@
 
 import type { IncomingHttpHeaders } from 'node:http'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -15,6 +15,7 @@ import { CollabAuth, type OidcGateway } from '@deepseek-ai/dsh-collab-auth'
 import { CollabUsers } from '@deepseek-ai/dsh-collab-users'
 import { CollabWorkspaces } from '@deepseek-ai/dsh-collab-workspaces'
 import { afterEach, describe, expect, it } from 'vitest'
+import { createCollabWorkspaceAccess } from '../src/access-gate.ts'
 import { apply, COLLAB_AUTH_LOGIN_PATH, COLLAB_AUTH_LOGOUT_PATH, COLLAB_AUTH_SESSION_PATH } from '../src/index.ts'
 import { dispatchCollabEndpoint, workspaceDataDir } from '../src/dispatch.ts'
 import { collabError } from '../src/errors.ts'
@@ -850,5 +851,47 @@ describe('additional HTTP handler paths', () => {
     expect(res.statusCode).toBe(302)
     expect(res.locationHeader).toBe('/?collab=signin-failed')
     expect(res.cookieHeader).toMatch(/^dsh_collab_session=;/)
+  })
+})
+
+describe('collab workspace access gate', () => {
+  it('allows members, denies non-members and principals without a userId, and always allows outside the boundary', async () => {
+    const boot = await bootServices()
+    const gate = createCollabWorkspaceAccess(boot.ctx)
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Team' })) as CollabWorkspaceView
+    const dir = workspaceDataDir(boot.ctx.collabWorkspaces.root, created.id)
+    const invitation = value(await call(boot, boot.admin, 'collab/workspace.invite', {
+      workspaceId: created.id,
+      email: boot.member.email,
+    })) as { id: string }
+    value(await call(boot, boot.member, 'collab/workspace.join', { invitationId: invitation.id }))
+
+    // Every member of the collab workspace may see and use its data directory,
+    // at the exact root and at any deeper path beneath it.
+    expect(gate.allow(boot.admin, dir)).toBe(true)
+    expect(gate.allow(boot.member, dir)).toBe(true)
+    expect(gate.allow(boot.member, join(dir, 'session-1', 'messages.jsonl'))).toBe(true)
+    // A principal that belongs to no collab workspace is denied inside the
+    // boundary regardless of path depth, and a missing userId resolves to no.
+    const stranger = { userId: 'no-such-user', email: 'ghost@example.com', globalRole: 'member' as const }
+    expect(gate.allow(stranger, dir)).toBe(false)
+    expect(gate.allow(stranger, join(dir, 'sub'))).toBe(false)
+    const noUserId = { userId: undefined, email: 'ghost@example.com', globalRole: 'member' as const }
+    expect(gate.allow(noUserId, dir)).toBe(false)
+    // Paths outside the collab workspaces boundary are Host-owned and allowed
+    // for every authenticated principal.
+    expect(gate.allow(stranger, join(boot.root, 'plain-workspace'))).toBe(true)
+    // The root is reported in canonical (realpath-resolved) form.
+    expect(gate.collabRoot).toBe(realpathSync.native(boot.ctx.collabWorkspaces.root))
+  })
+
+  it('falls back to the raw root while it is not yet present on disk', () => {
+    const absent = join(mkdtempSync(join(tmpdir(), 'dsh-collab-gate-')), 'absent')
+    const gate = createCollabWorkspaceAccess({
+      collabWorkspaces: { root: absent, memberOf: () => undefined },
+    } as unknown as Context)
+    expect(gate.collabRoot).toBe(absent)
+    expect(gate.allow({ userId: 'u', email: 'e', globalRole: 'member' as const }, join(absent, 'workspaces', 'beta', 'f'))).toBe(false)
+    expect(gate.allow({ userId: 'u', email: 'e', globalRole: 'member' as const }, join(absent, '..', 'elsewhere'))).toBe(true)
   })
 })

@@ -7,10 +7,12 @@
   },
   "files": [
     "src/access-gate.ts",
+    "src/clone.ts",
     "src/dispatch.ts",
     "src/errors.ts",
     "src/index.ts",
     "src/invariant.ts",
+    "src/settings.ts",
     "src/types.ts"
   ],
   "references": [

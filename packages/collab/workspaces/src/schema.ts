@@ -39,6 +39,8 @@ export const workspaceRecordSchema = z.object({
   members: z.array(memberSchema),
   createdAt: z.string(),
   updatedAt: z.string(),
+  repoUrl: z.string().min(1).optional(),
+  clonePath: z.string().min(1).optional(),
 }) as unknown as z.ZodType<WorkspaceRecord>
 
 /** One durable workspace invitation. */

@@ -4,8 +4,9 @@
  * @module @deepseek-ai/dsh-collab-api
  */
 
+import { randomUUID } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { CollabPrincipal } from '@deepseek-ai/dsh-collab-auth'
@@ -19,6 +20,9 @@ import type {
   WorkspaceSummary,
 } from '@deepseek-ai/dsh-collab-workspaces'
 import { InvitationId as makeInvitationId, WorkspaceId as makeWorkspaceId } from '@deepseek-ai/dsh-collab-workspaces'
+import type { NativeCommandRunner } from '@deepseek-ai/dsh-native-command'
+import { cloneDirectoryName, cloneFailureMessage, cloneRepository } from './clone.ts'
+import { readCloneDir } from './settings.ts'
 import type {
   CollabInvitationForMeView,
   CollabInvitationView,
@@ -218,7 +222,12 @@ ENDPOINTS.set('collab/workspace.list', (ctx, principal) => {
 
 ENDPOINTS.set('collab/workspace.create', async (ctx, principal, args) => {
   const name = requireString(args, 'name', 'collab/workspace.create')
-  const record = await ctx.collabWorkspaces.create(principal.globalRole, principal.userId, name)
+  const repoUrl = optionalRepoUrl(args)
+  if (repoUrl === undefined) {
+    const record = await ctx.collabWorkspaces.create(principal.globalRole, principal.userId, name)
+    return collabOk(recordView(record, principal.userId))
+  }
+  const record = await createClonedWorkspace(ctx, principal, name, repoUrl)
   return collabOk(recordView(record, principal.userId))
 })
 
@@ -237,7 +246,13 @@ ENDPOINTS.set('collab/workspace.members', async (ctx, principal, args) => {
 ENDPOINTS.set('collab/workspace.dir', async (ctx, principal, args) => {
   const raw = requireString(args, 'workspaceId', 'collab/workspace.dir')
   const { wsId } = requireWorkspaceAndRole(ctx, principal, raw)
-  const dir = workspaceDataDir(ctx.collabWorkspaces.root, wsId)
+  const record = ctx.collabWorkspaces.findById(wsId)
+  // requireWorkspaceAndRole proved the record exists; a miss here is an
+  // internal inconsistency (the maps change only through the same service).
+  /* v8 ignore start -- unreachable through the API (see above). */
+  if (record === undefined) throw new CollabWireError('collab-not-found', `collab: workspace '${wsId}' does not exist`)
+  /* v8 ignore stop */
+  const dir = workspaceWorkingDir(ctx, record)
   await mkdir(dir, { recursive: true })
   return collabOk<CollabWorkspaceDirView>({ dir })
 })
@@ -264,18 +279,26 @@ interface MountedWorkspaceLike {
 interface MountedWorkspaceRegistryLike {
   /** Every registered workspace (title-uniqueness reads). */
   list(): readonly { id: string; title: string }[]
-  /** Create a workspace over an existing directory, idempotently resolving the one already owning the path. */
-  create(path: string, title?: string): Promise<MountedWorkspaceLike>
+  /**
+   * Create a workspace over an existing directory, idempotently resolving the
+   * one already owning the path; a collab mount stamps the resoved workspace
+   * with the collab-origin marker (the local browsing region filters these).
+   */
+  create(path: string, title?: string, collabWorkspaceId?: string): Promise<MountedWorkspaceLike>
 }
 
 /**
- * Mount a collab workspace as a real Host workspace over its reserved data
- * directory (`<collab root>/workspaces/<workspaceId>`). Any member may open
+ * Mount a collab workspace as a real Host workspace over its working
+ * directory: the recorded clone path when bootstrapped from a repository
+ * (`<clone root>/<repo>-<workspaceId>`), otherwise the reserved data directory
+ * (`<collab root>/workspaces/<workspaceId>`). Any member may open
  * it; the Host registry resolves the SAME workspace for every member (the
  * path-based create is idempotent), so sessions born inside it land their
  * logs and files in the shared collab directory. The collab display name is
  * re-asserted as the Host title on reuse, guarding the Host registry's
- * title-uniqueness invariant.
+ * title-uniqueness invariant. The mount carries the collab-origin marker, so
+ * collab sessions stay in the collab section instead of surfacing in the
+ * local Workspaces browser.
  */
 ENDPOINTS.set('collab/workspace.open', async (ctx, principal, args) => {
   const raw = requireString(args, 'workspaceId', 'collab/workspace.open')
@@ -290,9 +313,9 @@ ENDPOINTS.set('collab/workspace.open', async (ctx, principal, args) => {
   /* v8 ignore start -- unreachable through the API (see above). */
   if (record === undefined) throw new CollabWireError('collab-not-found', `collab: workspace '${wsId}' does not exist`)
   /* v8 ignore stop */
-  const dir = workspaceDataDir(ctx.collabWorkspaces.root, wsId)
+  const dir = workspaceWorkingDir(ctx, record)
   await mkdir(dir, { recursive: true })
-  const workspace = await registry.create(dir, record.name)
+  const workspace = await registry.create(dir, record.name, String(wsId))
   if (workspace.title !== record.name) {
     if (registry.list().some(other => other.id !== workspace.id && other.title === record.name)) {
       throw new CollabWireError('collab-name-conflict', `collab: another workspace is already named '${record.name}'`)
@@ -429,6 +452,81 @@ export async function dispatchCollabEndpoint(
   } catch (error) {
     return foldedError(error)
   }
+}
+
+/**
+ * Optional trimmed, validated repository URL from a create payload. Absent is
+ * a name-only create; present must be a non-empty string.
+ * @param args - raw create payload.
+ * @returns the trimmed repository URL, or undefined when the caller created by name.
+ */
+function optionalRepoUrl(args: Record<string, unknown>): string | undefined {
+  const value = args.repoUrl
+  if (value === undefined) return undefined
+  if (typeof value !== 'string') {
+    throw new CollabWireError('collab-bad-request', "collab/workspace.create: 'repoUrl' must be a string")
+  }
+  const trimmed = value.trim()
+  if (trimmed === '') {
+    throw new CollabWireError('collab-bad-request', "collab/workspace.create: 'repoUrl' must not be empty")
+  }
+  return trimmed
+}
+
+/**
+ * The root directory a repo-backed workspace clones into: the configured
+ * clone directory (settings `collab.cloneDir`), or the default collab
+ * workspaces layout under the collab data root when unset.
+ * @param ctx - the collab API plugin context.
+ * @returns the absolute clone root.
+ */
+function cloneRootOf(ctx: Context): string {
+  const configured = readCloneDir(ctx)
+  return configured === '' ? join(ctx.collabWorkspaces.root, 'workspaces') : resolve(configured)
+}
+
+/**
+ * The working directory a collab workspace mounts over: its recorded clone
+ * directory when bootstrapped from a repository, its reserved data directory
+ * otherwise.
+ * @param ctx - the collab API plugin context.
+ * @param record - the workspace record.
+ * @returns the absolute working directory.
+ */
+function workspaceWorkingDir(ctx: Context, record: WorkspaceRecord): string {
+  return record.clonePath ?? workspaceDataDir(ctx.collabWorkspaces.root, record.id)
+}
+
+/**
+ * Bootstrap a workspace from a repository: mint the id, clone the repository
+ * into `<clone root>/<repo>-<workspaceId>`, then commit the record carrying
+ * the repo URL and clone path atomically. A failed clone removes the partial
+ * target and surfaces as `collab-clone-failed` before any record exists.
+ * @param ctx - the collab API plugin context.
+ * @param principal - the creating, gate-resolved caller.
+ * @param name - the workspace display name.
+ * @param repoUrl - the validated repository URL to clone.
+ * @returns the created workspace record.
+ */
+async function createClonedWorkspace(
+  ctx: Context,
+  principal: CollabPrincipal,
+  name: string,
+  repoUrl: string,
+): Promise<WorkspaceRecord> {
+  const wsId = makeWorkspaceId(randomUUID())
+  const clonePath = join(cloneRootOf(ctx), cloneDirectoryName(String(wsId), repoUrl))
+  const runner = ctx.get('collabRepoCloner', false) as NativeCommandRunner | undefined
+  try {
+    await cloneRepository(repoUrl, clonePath, runner)
+  } catch (error) {
+    throw new CollabWireError('collab-clone-failed', `collab: ${cloneFailureMessage(repoUrl, error)}`)
+  }
+  return ctx.collabWorkspaces.create(principal.globalRole, principal.userId, name, {
+    id: wsId,
+    repoUrl,
+    clonePath,
+  })
 }
 
 /**

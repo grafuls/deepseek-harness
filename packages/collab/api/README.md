@@ -43,7 +43,11 @@ The `collab/*` endpoints ride the shared `/api` channel with the standard JSON-R
 | `collab/users.setGlobalRole` | promote/demote an account (`admin`/`member`); instance-admin only |
 | `collab/users.setDisabled` | disable/enable an account; instance-admin only |
 
-Errors fold to a closed `RpcError` code set: `collab-forbidden` for authorization denials (service RBAC), `collab-not-found` for unknown workspaces, `collab-bad-request` for malformed wire fields or other service failures, `collab-internal` for a missing host service (the workspace registry is absent from the composition), and `collab-name-conflict` when re-asserting a collab name that collides with another Host workspace title. Every endpoint is validated at the wire boundary, then delegated to the owning service, which owns persistence and RBAC.
+Errors fold to a closed `RpcError` code set: `collab-forbidden` for authorization denials (service RBAC), `collab-not-found` for unknown workspaces, `collab-bad-request` for malformed wire fields or other service failures, `collab-internal` for a missing host service (the workspace registry is absent from the composition), `collab-name-conflict` when re-asserting a collab name that collides with another Host workspace title, and `collab-clone-failed` when a repository-backed workspace's clone fails. Every endpoint is validated at the wire boundary, then delegated to the owning service, which owns persistence and RBAC.
+
+## Repository-backed workspaces
+
+`collab/workspace.create` accepts a `repoUrl` this is omitted or an empty string for a name-only workspace. A non-empty repository URL makes the gateway clone the repository into a local directory and register the clone as the workspace's data, instead of materializing a fresh empty data directory. The clone target is `<cloneRoot>/<repoName>-<workspaceId>`, where `<workspaceId>` is the generated workspace id, `<repoName>` is the repository name sanitized to a filesystem-safe component (so an administrator can recognize which repository a clone roots at), and `<cloneRoot>` is the `cloneDir` setting of the `collab` settings namespace when set, otherwise the collab data root's `workspaces` directory. The clone runs through the collab-local no-shell `git clone` (spawned with no stdin and `GIT_TERMINAL_PROMPT=0`, so a repository the user cannot access fails fast with git's stderr instead of hanging on a credential prompt) with a ten-minute timeout; `collab/workspace.open` and `collab/workspace.dir` resolve the clone path for repo-backed records, so members share the cloned working tree as the mounted workspace's data. A failed clone removes the partial target, registers no record, and answers `collab-clone-failed`. The access gate applies to the clone directory through the collab `workspaceHolding` relationship exactly as it does for the data root, so a non-member's request for a path under a hidden clone is refused.
 
 ## Host plane membership scoping
 
@@ -51,7 +55,7 @@ The collab assembly also stages the membership decision for the Host workspace p
 
 ## Configuration
 
-The plugin takes no configuration; every tuning lives in the collab services it mounts (`dsh-collab-*` roots, OAuth client, cookie policy).
+The plugin's one field is the composition fallback for repository clones: `cloneDir` seeds the runtime `collab` settings namespace's `cloneDir` value (the default repository-clone directory), which after boot is owned by the user through the Collaborative Workspaces settings page. Every other tuning lives in the collab services it mounts (`dsh-collab-*` roots, OAuth client, cookie policy).
 
 ```yaml
 - id: collab-users
@@ -71,6 +75,11 @@ The plugin takes no configuration; every tuning lives in the collab services it 
     baseUrl: http://localhost:3080
 - id: collab-api
   name: '@deepseek-ai/dsh-collab-api'
+  config:
+    # Optional: default directory for cloning repository-backed workspaces
+    # before the user overrides it through the settings page. Empty (the
+    # default) clones under the collab data root's `workspaces` directory.
+    cloneDir: !!js dshHomePath('collab/clones')
 ```
 
 ## Model Experience
@@ -89,3 +98,4 @@ The package contributes nothing to model requests, so it cannot invalidate cache
 - **Two live echoes carry hidden session ids without conversation** — the `host()` archived-sessions echo and the `mux()` task/queue/question baselines are process-global, so they still carry workspace ids, session ids, or task state for collab sessions a caller cannot see; they carry no conversation content, and the enumerated surfaces (`workspace.list`, `sessions.list`/`search`, `history`, `fork`) are fully scoped.
 - **Membership is sampled at request time and at stream open** — the principal a `host()`/`mux()` stream captured when it opened stays fixed for that stream's life, so a membership grant or revocation applies to new requests and new streams, not to frames already in flight.
 - **`loader.await()` does not imply the collab surface is ready** — dependent activation settles a tick after the tree reports loaded, so a readiness consumer should probe `/api/collab/auth/session` before issuing requests (the real-composition test does exactly this).
+- **Delete removes the record, not the data** — `collab/workspace.delete` unregisters the workspace but leaves its clone (or data) directory on disk, so a deleted repository-backed workspace's working tree remains accessible to the host process. Re-creating a workspace from the same URL materializes a fresh clone in a fresh id-named directory.

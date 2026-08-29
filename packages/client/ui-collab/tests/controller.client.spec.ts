@@ -66,19 +66,22 @@ function workspacePort(items: Array<{ workspaceId: string }> = []): {
 
 function harness(
   script: Record<string, Array<CollabRpcResultOk<unknown> | CollabRpcResultError>> = {},
-  items: Array<{ workspaceId: string }> = [],
+  items: Array<{ workspaceId: string; collab?: { workspaceId: string } }> = [],
 ): {
   store: ReturnType<typeof createCollabWorkspacesStore>
   controller: CollabWorkspacesController
   seen: string[]
+  seenPayloads: Array<Record<string, unknown>>
   push: (workspaceId: string) => void
   startSession: ReturnType<typeof vi.fn>
 } {
   const seen: string[] = []
+  const seenPayloads: Array<Record<string, unknown>> = []
   const cursor = new Map<string, number>()
-  const call: CollabRpcChannel['call'] = async (_channel, endpoint) => {
+  const call: CollabRpcChannel['call'] = async (_channel, endpoint, payload) => {
     const key = endpoint
     seen.push(key)
+    if (payload !== undefined) seenPayloads.push(payload as Record<string, unknown>)
     const queue = script[key]
     if (queue === undefined) throw new Error(`fake: no script for ${key}`)
     const index = cursor.get(key) ?? 0
@@ -89,7 +92,7 @@ function harness(
   const store = createCollabWorkspacesStore()
   const { port, push, startSession } = workspacePort(items)
   const controller = new CollabWorkspacesController(api, store, port, zhTranslate)
-  return { store, controller, seen, push, startSession }
+  return { store, controller, seen, seenPayloads, push, startSession }
 }
 
 /** Seed a selection so detail paths have a target (store is plain data). */
@@ -100,17 +103,79 @@ function selected(): ReturnType<typeof createCollabWorkspacesStore> {
 }
 
 describe('CollabWorkspacesController', () => {
-  it('opens and closes the panel purely in the store', () => {
+  it('sets the collab list grouping and order modes in the shared store', () => {
     const { store, controller } = harness()
+    expect(store.getSnapshot().groupBy).toBe('workspace')
+    expect(store.getSnapshot().orderBy).toBe('updated')
+    controller.setGroupBy('flat')
+    controller.setOrderBy('manual')
+    expect(store.getSnapshot().groupBy).toBe('flat')
+    expect(store.getSnapshot().orderBy).toBe('manual')
+  })
+
+  it('opens the panel, refreshing the list and pending invitations, and closes it', async () => {
+    const mine = { id: 'i1', workspaceId: 'w1', workspaceName: 'Alpha', role: 'admin', createdAt: '2020-01-01T00:00:00.000Z' }
+    const { store, controller, seen } = harness({
+      'collab/workspace.list': [ok([WORKSPACE])],
+      'collab/workspace.myInvitations': [ok([mine])],
+    })
+    expect(store.getSnapshot().open).toBe(false)
     controller.openPanel()
     expect(store.getSnapshot().open).toBe(true)
+    // Opening the panel reloads the accept surface, so a pending invitation
+    // is visible without a page reload.
+    await vi.waitFor(() => { expect(store.getSnapshot().invitationsForMe).toEqual([mine]) })
+    expect(seen).toEqual(['collab/workspace.list', 'collab/workspace.myInvitations'])
     controller.closePanel()
     expect(store.getSnapshot().open).toBe(false)
     expect(store.getSnapshot().error).toBeUndefined()
   })
 
+  it('auto-refreshes the accept surface on an interval and stops on demand', async () => {
+    vi.useFakeTimers()
+    try {
+      const mine = { id: 'i1', workspaceId: 'w1', workspaceName: 'Alpha', role: 'admin', createdAt: '2020-01-01T00:00:00.000Z' }
+      const { store, controller, seen } = harness({
+        'collab/auth.status': [ok({ authenticated: true })],
+        'collab/workspace.list': [ok([]), ok([]), ok([])],
+        'collab/workspace.myInvitations': [ok([]), ok([mine]), ok([mine])],
+      })
+      await controller.refreshAvailability()
+      controller.startAutoRefresh()
+      controller.startAutoRefresh() // idempotent: exactly one interval
+      // The probe (3 calls) and the first tick (2 calls) settle together; a
+      // second interval would exhaust the script and reject.
+      await vi.advanceTimersByTimeAsync(31_000)
+      expect(seen).toHaveLength(5)
+      // The tick loaded the pending invitation into the open accept surface.
+      expect(store.getSnapshot().invitationsForMe).toEqual([mine])
+      // Ticks skip while a mutation is in flight…
+      store.set({ ...store.getSnapshot(), working: true })
+      await vi.advanceTimersByTimeAsync(70_000)
+      expect(seen).toHaveLength(5)
+      // …and while the collab surface is not ready.
+      store.set({ ...store.getSnapshot(), working: false, availability: 'hidden' })
+      await vi.advanceTimersByTimeAsync(70_000)
+      expect(seen).toHaveLength(5)
+      // Stopping halts the interval; a second stop is a no-op.
+      controller.stopAutoRefresh()
+      await vi.advanceTimersByTimeAsync(70_000)
+      expect(seen).toHaveLength(5)
+      controller.stopAutoRefresh()
+      // Restarting after a stop spins up a fresh interval that ticks again.
+      store.set({ ...store.getSnapshot(), availability: 'ready' })
+      controller.startAutoRefresh()
+      await vi.advanceTimersByTimeAsync(31_000)
+      expect(seen).toHaveLength(7)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('opens the panel onto a workspace detail', async () => {
     const { store, controller } = harness({
+      'collab/workspace.list': [ok([WORKSPACE])],
+      'collab/workspace.myInvitations': [ok([])],
       'collab/workspace.members': [ok([MEMBER])],
       'collab/workspace.invitations': [ok([INVITATION])],
     })
@@ -314,6 +379,37 @@ describe('CollabWorkspacesController', () => {
     expect(seen).toEqual([])
   })
 
+  it('creates a repository-backed workspace with a trimmed repo URL payload', async () => {
+    const created = { ...WORKSPACE, name: 'Product' }
+    const { store, controller, seen, seenPayloads } = harness({
+      'collab/workspace.create': [ok(created)],
+      'collab/workspace.members': [ok([{ ...MEMBER }])],
+      'collab/workspace.invitations': [ok([])],
+    })
+    await expect(controller.create('Product', '  https://github.com/example/product.git  ')).resolves.toBe('w1')
+    expect(seen[0]).toBe('collab/workspace.create')
+    expect(seenPayloads[0]).toEqual({ name: 'Product', repoUrl: 'https://github.com/example/product.git' })
+    expect(store.getSnapshot().workspaces[0]!.name).toBe('Product')
+  })
+
+  it('omits the repo URL from the payload when the field is blank', async () => {
+    const { controller, seenPayloads } = harness({
+      'collab/workspace.create': [ok(WORKSPACE)],
+      'collab/workspace.members': [ok([{ ...MEMBER }])],
+      'collab/workspace.invitations': [ok([])],
+    })
+    await controller.create('Beta', '   ')
+    // The create call is the first wire payload; the select detail loads follow.
+    expect(seenPayloads[0]).toEqual({ name: 'Beta' })
+  })
+
+  it('folds a clone failure into the dedicated banner', async () => {
+    const { store, controller } = harness({ 'collab/workspace.create': [refusal('collab-clone-failed')] })
+    await controller.create('Product', 'https://github.com/example/no.git')
+    expect(store.getSnapshot().error).toBe('克隆仓库失败，请检查地址后重试')
+    expect(store.getSnapshot().working).toBe(false)
+  })
+
   it('invites, revokes, changes roles, and removes members against the selection', async () => {
     const revoked = { ...INVITATION, revoked: true }
     const { store, controller, seen } = harness({
@@ -359,6 +455,47 @@ describe('CollabWorkspacesController', () => {
       zhTranslate,
     )
     expect(await noop.deleteSelected()).toBe(false)
+  })
+
+  it('deletes a workspace by id and drops only that record', async () => {
+    const second: CollabWorkspaceView = { id: 'w2', name: 'Beta', memberCount: 3, isOwner: false, role: 'developer', createdAt: '2021-01-01T00:00:00.000Z' }
+    const { store, controller, seen } = harness({
+      'collab/workspace.delete': [ok({ deleted: true })],
+    })
+    store.set({ ...store.getSnapshot(), workspaces: [WORKSPACE, second], selectedId: undefined })
+    await expect(controller.delete('w1')).resolves.toBe(true)
+    const after = store.getSnapshot()
+    expect(after.workspaces.map(workspace => workspace.id)).toEqual(['w2'])
+    expect(after.selectedId).toBeUndefined()
+    expect(seen).toEqual(['collab/workspace.delete'])
+  })
+
+  it('clears the panel detail when deleting the selected workspace', async () => {
+    const { store, controller } = harness({ 'collab/workspace.delete': [ok({ deleted: true })] })
+    store.set({
+      ...selected().getSnapshot(),
+      members: [MEMBER],
+      invitations: [INVITATION],
+    })
+    await expect(controller.delete('w1')).resolves.toBe(true)
+    const after = store.getSnapshot()
+    expect(after.selectedId).toBeUndefined()
+    expect(after.myRole).toBeUndefined()
+    expect(after.members).toEqual([])
+    expect(after.invitations).toEqual([])
+  })
+
+  it('folds a delete failure without dropping the record', async () => {
+    const { store, controller, seen } = harness({
+      'collab/workspace.delete': [refusal('collab-forbidden')],
+    })
+    store.set({ ...store.getSnapshot(), workspaces: [WORKSPACE] })
+    await expect(controller.delete('w1')).resolves.toBe(false)
+    const after = store.getSnapshot()
+    expect(after.workspaces.map(workspace => workspace.id)).toEqual(['w1'])
+    expect(after.error).toBe('没有权限执行此操作')
+    expect(after.working).toBe(false)
+    expect(seen).toEqual(['collab/workspace.delete'])
   })
 
   it('a no-target mutation is a safe no-op', async () => {
@@ -446,5 +583,46 @@ describe('CollabWorkspacesController', () => {
     expect(failingStore.getSnapshot().error).toBe('连接服务失败，请重试')
     expect(failingStore.getSnapshot().working).toBe(false)
     expect(store.getSnapshot().error).toBeUndefined()
+  })
+})
+
+describe('CollabWorkspacesController mountAll', () => {
+  it('mounts every collab workspace the runtime does not already reflect', async () => {
+    const { controller, store, seen, seenPayloads } = harness(
+      {
+        'collab/workspace.open': [ok(MOUNTED), ok({ ...MOUNTED, workspace: { ...MOUNTED.workspace, workspaceId: 'h2' } })],
+      },
+      [],
+    )
+    store.set({ ...store.getSnapshot(), workspaces: [WORKSPACE, { ...WORKSPACE, id: 'w2', name: 'Beta' }] })
+    await controller.mountAll()
+    expect(seen.filter(endpoint => endpoint === 'collab/workspace.open')).toEqual(['collab/workspace.open', 'collab/workspace.open'])
+    expect(seenPayloads).toEqual([{ workspaceId: 'w1' }, { workspaceId: 'w2' }])
+  })
+
+  it('skips collab workspaces the runtime already reflects through their mounts', async () => {
+    const { controller, store, seen } = harness(
+      { 'collab/workspace.open': [ok(MOUNTED)] },
+      [{ workspaceId: 'h1', collab: { workspaceId: 'w1' } }],
+    )
+    store.set({ ...store.getSnapshot(), workspaces: [WORKSPACE, { ...WORKSPACE, id: 'w2', name: 'Beta' }] })
+    await controller.mountAll()
+    expect(seen.filter(endpoint => endpoint === 'collab/workspace.open')).toEqual(['collab/workspace.open'])
+  })
+
+  it('keeps mounting the rest and surfaces the first wire failure', async () => {
+    const { controller, store, seen } = harness(
+      {
+        'collab/workspace.open': [
+          { ok: false, error: { code: 'collab-not-found', message: 'boom' } },
+          ok(MOUNTED),
+        ],
+      },
+      [],
+    )
+    store.set({ ...store.getSnapshot(), workspaces: [WORKSPACE, { ...WORKSPACE, id: 'w2', name: 'Beta' }] })
+    await controller.mountAll()
+    expect(seen.filter(endpoint => endpoint === 'collab/workspace.open')).toEqual(['collab/workspace.open', 'collab/workspace.open'])
+    expect(store.getSnapshot().error).toBe('工作区不存在或已被删除')
   })
 })

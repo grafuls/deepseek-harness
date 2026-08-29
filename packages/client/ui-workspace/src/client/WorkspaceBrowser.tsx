@@ -221,6 +221,8 @@ type SessionTreeProps = Pick<
   /** Host account home for POSIX hover-path abbreviation. */
   home?: string | undefined
   workspaces: readonly WorkspaceView[]
+  /** Sessions withheld from every row set (collab-origin mounts browse in the collab section). */
+  hiddenSessionIds: ReadonlySet<SessionId>
   /** Explicit persisted zero-or-five-session state by Workspace group. */
   groupExpansion: Readonly<Record<string, boolean>>
   /** Persist one Workspace group's zero-or-five-session state. */
@@ -249,7 +251,7 @@ type SessionTreeProps = Pick<
 
 /** The scrolling session tree; unmounting drops the sessions subscription and expand-all state. */
 function SessionTree({
-  useSessions, startSession, open, forkSession, workspaces, archivedSessionIds,
+  useSessions, startSession, open, forkSession, workspaces, hiddenSessionIds, archivedSessionIds,
   onRenameRequest, onDeleteRequest, onSessionRename, onSessionArchive,
   insertWorkspaceBefore, insertSessionBefore, orderBy,
   groupExpansion, setGroupExpanded,
@@ -280,8 +282,9 @@ function SessionTree({
   )
   const ungroupedSessionIds = useMemo(() => {
     const accounted = new Set(workspaces.flatMap(workspace => workspace.sessionIds))
-    return list.ids.filter(id => list.byId[id] !== undefined && !accounted.has(id))
-  }, [list, workspaces])
+    return list.ids.filter(id =>
+      list.byId[id] !== undefined && !accounted.has(id) && !hiddenSessionIds.has(id))
+  }, [list, workspaces, hiddenSessionIds])
   useEffect(() => {
     if (list.phase !== 'ready') return
     const switchedToUpdated = previousOrderBy.current !== 'updated' && orderBy === 'updated'
@@ -326,8 +329,8 @@ function SessionTree({
       ...(sessionOrderByAccount[UNGROUPED_KEY] === undefined
         ? {}
         : { ungroupedOrder: sessionOrderByAccount[UNGROUPED_KEY] }),
-    }),
-    [list, orderedWorkspaces, archivedSessionIds, expandedGroups, sessionOrderByAccount],
+    }, hiddenSessionIds),
+    [list, orderedWorkspaces, archivedSessionIds, expandedGroups, sessionOrderByAccount, hiddenSessionIds],
   )
   const now = Date.now()
   const commitSessionDrag = (activeDrag: DragState, over: NonNullable<DragState['over']>): void => {
@@ -548,6 +551,7 @@ function SessionTree({
 /** The flat "In one list" body: every session is one draggable top-level row. */
 function FlatList({
   useSessions, open, forkSession, onSessionRename, onSessionArchive, archivedSessionIds,
+  hiddenSessionIds,
   orderBy, sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, t,
 }: Pick<
   SessionTreeProps,
@@ -557,6 +561,7 @@ function FlatList({
   | 'onSessionRename'
   | 'onSessionArchive'
   | 'archivedSessionIds'
+  | 'hiddenSessionIds'
   | 'orderBy'
   | 'sessionOrderByAccount'
   | 'sessionUpdatedAtByAccount'
@@ -566,8 +571,8 @@ function FlatList({
 >) {
   const list = useSessions(s => s)
   const baseRows = useMemo(
-    () => deriveFlat(list, archivedSessionIds),
-    [list, archivedSessionIds],
+    () => deriveFlat(list, archivedSessionIds, hiddenSessionIds),
+    [list, archivedSessionIds, hiddenSessionIds],
   )
   const sessionIds = useMemo(() => baseRows.map(row => row.id), [baseRows])
   const previousOrderBy = useRef(orderBy)
@@ -676,13 +681,14 @@ interface RemoteSearchState {
 function SearchResults({
   useSessions,
   open,
+  hiddenSessionIds,
   workspaces,
   archivedSessionIds,
   query,
   remote,
   resultLimit,
   t,
-}: Pick<SessionTreeProps, 'useSessions' | 'open' | 't'> & {
+}: Pick<SessionTreeProps, 'useSessions' | 'open' | 't' | 'hiddenSessionIds'> & {
   workspaces: readonly WorkspaceView[]
   archivedSessionIds: readonly SessionNode['id'][]
   query: string
@@ -694,8 +700,8 @@ function SearchResults({
     ? remote
     : { query, status: 'loading' as const, items: [], hasMore: false }
   const results = useMemo(
-    () => deriveSearchResults(list, workspaces, query, archivedSessionIds, currentRemote, resultLimit),
-    [list, workspaces, query, archivedSessionIds, currentRemote, resultLimit],
+    () => deriveSearchResults(list, workspaces, query, archivedSessionIds, currentRemote, resultLimit, hiddenSessionIds),
+    [list, workspaces, query, archivedSessionIds, currentRemote, resultLimit, hiddenSessionIds],
   )
   const pending = currentRemote.status === 'loading'
   const failed = currentRemote.status === 'error'
@@ -769,6 +775,18 @@ export function WorkspaceBrowser({
   const workspaces = useWorkspaces(state => state.items)
   const workspacePhase = useWorkspaces(state => state.phase)
   const archivedSessionIds = useWorkspaces(state => state.archivedSessionIds)
+  // Collab-origin mounts (marked on the Host record by the collab `open`) are
+  // browsed in the collab section beneath this list: keep their sessions out
+  // of every local row set and their folders out of the local grouping.
+  const collabSessionIds = useMemo(
+    () => new Set(workspaces.flatMap(
+      workspace => workspace.collab === undefined ? [] : workspace.sessionIds)),
+    [workspaces],
+  )
+  const localWorkspaces = useMemo(
+    () => workspaces.filter(workspace => workspace.collab === undefined),
+    [workspaces],
+  )
   // Live occupancy of this surface's directory-flow hole (the same source the
   // flow reads): a composition without a picking affordance can add nothing.
   const directoryFlowAvailable = useDirectoryFlow(occupied => occupied)
@@ -783,7 +801,7 @@ export function WorkspaceBrowser({
   })
   const currentBlankAccount = currentBlankSessionId === undefined
     ? undefined
-    : (workspaces.find(workspace => workspace.sessionIds.includes(currentBlankSessionId))
+    : (localWorkspaces.find(workspace => workspace.sessionIds.includes(currentBlankSessionId))
       ?.workspaceId as string | undefined) ?? UNGROUPED_KEY
   const promotedBlank = useRef<{ sessionId: SessionId; accountKey: string } | undefined>(undefined)
   useEffect(() => {
@@ -807,9 +825,9 @@ export function WorkspaceBrowser({
     actions.retainAccountKeys([
       UNGROUPED_KEY,
       FLAT_SESSION_ORDER_KEY,
-      ...workspaces.map(workspace => workspace.workspaceId as string),
+      ...localWorkspaces.map(workspace => workspace.workspaceId as string),
     ])
-  }, [actions.retainAccountKeys, workspacePhase, workspaces])
+  }, [actions.retainAccountKeys, workspacePhase, localWorkspaces])
   // The query outlives the tree and the input (both wide-only) so collapsing
   // does not silently drop an in-progress filter.
   const [query, setQuery] = useState('')
@@ -908,7 +926,7 @@ export function WorkspaceBrowser({
   const [renameError, setRenameError] = useState<string | null>(null)
   const renameTrimmed = renameDraft.trim()
   const renameDuplicate = renameTarget !== null && renameTrimmed !== '' && renameTrimmed !== renameTarget.currentTitle
-    && workspaces.some(w => w.title === renameTrimmed)
+    && localWorkspaces.some(w => w.title === renameTrimmed)
   const renameBlocked = renaming || renameTrimmed === ''
     || renameTarget === null || renameTrimmed === renameTarget.currentTitle || renameDuplicate
   const closeRename = () => {
@@ -980,7 +998,7 @@ export function WorkspaceBrowser({
   const [deleteError, setDeleteError] = useState<string | null>(null)
   useEffect(() => {
     if (deleteCommittedId === null
-      || workspaces.some(workspace => workspace.workspaceId === deleteCommittedId)) return
+      || localWorkspaces.some(workspace => workspace.workspaceId === deleteCommittedId)) return
     setDeleting(false)
     setDeleteCommittedId(null)
     setDeleteTarget(null)
@@ -1146,7 +1164,8 @@ export function WorkspaceBrowser({
             <SearchResults
               useSessions={useSessions}
               open={open}
-              workspaces={workspaces}
+              hiddenSessionIds={collabSessionIds}
+              workspaces={localWorkspaces}
               archivedSessionIds={archivedSessionIds}
               query={normalizedQuery}
               remote={remoteSearch}
@@ -1160,6 +1179,7 @@ export function WorkspaceBrowser({
                 useSessions={useSessions} open={open} forkSession={forkSession}
                 onSessionRename={onSessionRename} onSessionArchive={onSessionArchive}
                 archivedSessionIds={archivedSessionIds}
+                hiddenSessionIds={collabSessionIds}
                 orderBy={orderBy}
                 sessionOrderByAccount={sessionOrderByAccount}
                 sessionUpdatedAtByAccount={sessionUpdatedAtByAccount}
@@ -1174,7 +1194,8 @@ export function WorkspaceBrowser({
                 onSessionRename={onSessionRename}
                 onSessionArchive={onSessionArchive}
                 forkSession={forkSession}
-                workspaces={workspaces}
+                workspaces={localWorkspaces}
+                hiddenSessionIds={collabSessionIds}
                 groupExpansion={groupExpansion}
                 setGroupExpanded={actions.setGroupExpanded}
                 sessionOrderByAccount={sessionOrderByAccount}

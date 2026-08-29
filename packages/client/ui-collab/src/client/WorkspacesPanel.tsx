@@ -5,12 +5,13 @@
 // open.
 
 import { useState, type ReactNode } from 'react'
+import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import type { InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CollabRole } from './contract.ts'
 import { CreateWorkspace } from './CreateWorkspace.tsx'
 import type { NS } from './locales.ts'
-import type { CollabWorkspacesState } from './store.ts'
+import type { CollabGroupBy, CollabOrderBy, CollabWorkspacesState } from './store.ts'
 import css from './WorkspacesPanel.module.css'
 
 /** The collab actions the manager hands down to its surfaces. */
@@ -27,8 +28,18 @@ export interface CollabWorkspacesActions {
   openManager: (workspaceId: string) => void
   /** Mount a collab workspace as a real Host workspace and switch the GUI into it. */
   openWorkspace: (workspaceId: string) => void
-  /** Create a workspace by name and select it. */
-  create: (name: string) => void
+  /** Mount every not-yet-mounted collab workspace in the background (section session browsing). */
+  mountAll: () => void
+  /** Open one mounted collab session in the GUI (browser row click, like the local section). */
+  open: (sessionId: SessionId) => void
+  /** Delete a collab workspace from the section row's options menu. */
+  delete: (workspaceId: string) => void
+  /** Set the collab list grouping mode (view options). */
+  setGroupBy: (mode: CollabGroupBy) => void
+  /** Set the collab list order mode (view options). */
+  setOrderBy: (mode: CollabOrderBy) => void
+  /** Create a workspace by name (optionally bootstrap from a repository URL) and select it; resolves false on failure. */
+  create: (name: string, repoUrl?: string) => Promise<boolean>
   /** Invite a user by email to the selected workspace. */
   invite: (email: string, role: CollabRole) => void
   /** Revoke one pending invitation. */
@@ -148,7 +159,7 @@ function WorkspacesList({ state, actions, t }: {
           <span className={css.rowMeta}>{t('memberCount', { count: String(workspace.memberCount) })}</span>
         </button>
       ))}
-      <CreateWorkspace actions={actions} t={t} />
+      <CreateWorkspace actions={actions} error={state.error} t={t} />
     </div>
   )
 }

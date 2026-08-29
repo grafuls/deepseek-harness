@@ -9,13 +9,15 @@
 import type { TranslateNS } from '@deepseek-ai/dsh-client-locale/client'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import { CollabError, type CollabApi, type CollabRole } from './contract.ts'
-import type { CollabWorkspacesState } from './store.ts'
+import type { CollabGroupBy, CollabOrderBy, CollabWorkspacesState } from './store.ts'
 
 /** The runtime Workspace face the opener switches into a mounted collab workspace. */
 export interface WorkspacePort {
   /** The live Host Workspace list snapshot store (client projection). */
   list: {
-    getSnapshot(): { items: readonly { workspaceId: string }[] }
+    getSnapshot(): {
+      items: readonly { workspaceId: string; collab?: { workspaceId: string } }[]
+    }
     subscribe(listener: () => void): () => void
   }
   /** The shared New Session action: connect the target Workspace and open it. */
@@ -51,6 +53,7 @@ export class CollabWorkspacesController {
         case 'collab-forbidden': return this.t('errorForbidden')
         case 'collab-not-found': return this.t('errorNotFound')
         case 'collab-bad-request': return this.t('errorBadRequest')
+        case 'collab-clone-failed': return this.t('errorCloneFailed')
         default: return this.t('errorFailed')
       }
     }
@@ -59,11 +62,13 @@ export class CollabWorkspacesController {
 
 
   /**
-   * Open the panel.
+   * Open the panel and refresh the workspace list and pending invitations, so
+   * the manager never shows an accept surface or list stale since page load.
    * @returns the new open state.
    */
   openPanel(): void {
     this.store.set({ ...this.store.getSnapshot(), open: true })
+    void this.refresh()
   }
 
   /**
@@ -97,6 +102,29 @@ export class CollabWorkspacesController {
     } catch (error) {
       this.store.set({ ...this.store.getSnapshot(), working: false, error: this.foldWireError(error) })
       return false
+    }
+  }
+
+  /**
+   * Mount every collab workspace the runtime does not already reflect, without
+   * switching the GUI (background materialization for the section's session
+   * browsing). The collab `open` is path-idempotent, so repeated runs only
+   * resolve the already-mounted records; a workspace whose mount fails keeps
+   * going and surfaces that error where the manager would show it.
+   */
+  async mountAll(): Promise<void> {
+    const mountedCollabIds = new Set(
+      this.workspaces.list.getSnapshot().items
+        .map(item => item.collab?.workspaceId)
+        .filter((id): id is string => id !== undefined),
+    )
+    for (const workspace of this.store.getSnapshot().workspaces) {
+      if (mountedCollabIds.has(workspace.id)) continue
+      try {
+        await this.api.open(workspace.id)
+      } catch (error) {
+        this.store.set({ ...this.store.getSnapshot(), error: this.foldWireError(error) })
+      }
     }
   }
 
@@ -140,6 +168,52 @@ export class CollabWorkspacesController {
    */
   closePanel(): void {
     this.store.set({ ...this.store.getSnapshot(), open: false, error: undefined })
+  }
+
+  /**
+   * Set the collab list grouping mode (view options), mirroring the local
+   * Workspaces browser: workspace rows (folder chrome) or one flat list.
+   * @param mode - the grouping mode to apply.
+   */
+  setGroupBy(mode: CollabGroupBy): void {
+    this.store.set({ ...this.store.getSnapshot(), groupBy: mode })
+  }
+
+  /**
+   * Set the collab list order mode (view options), mirroring the local
+   * Workspaces browser: the server list order or creation recency.
+   * @param mode - the order mode to apply.
+   */
+  setOrderBy(mode: CollabOrderBy): void {
+    this.store.set({ ...this.store.getSnapshot(), orderBy: mode })
+  }
+
+  /** Disposers for the running auto-refresh interval, absent while idle. */
+  private autoRefresh: (() => void) | undefined
+
+  /**
+   * Start refreshing the workspace list and pending invitations on an
+   * interval, so invitations addressed to this user appear in an already-open
+   * page without a reload (the accept surface would otherwise be a
+   * per-page-load snapshot). Ticks skip while the collab surface is not ready
+   * or a mutation is in flight. Idempotent; paired with {@link stopAutoRefresh}.
+   * @param intervalMs - the refresh period in milliseconds.
+   */
+  startAutoRefresh(intervalMs = 30_000): void {
+    if (this.autoRefresh !== undefined) return
+    const timer = setInterval(() => {
+      const state = this.store.getSnapshot()
+      if (state.availability === 'ready' && !state.working) void this.refresh()
+    }, intervalMs)
+    this.autoRefresh = () => { clearInterval(timer) }
+  }
+
+  /**
+   * Stop the auto-refresh interval, if one is running.
+   */
+  stopAutoRefresh(): void {
+    this.autoRefresh?.()
+    this.autoRefresh = undefined
   }
 
   /**
@@ -242,19 +316,22 @@ export class CollabWorkspacesController {
   }
 
   /**
-   * Create a workspace and select it.
+   * Create a workspace and select it. An optional repository URL bootstraps
+   * the workspace from a clone the server materializes.
    * @param name - the workspace display name.
+   * @param repoUrl - git repository URL to clone as the workspace; omit for a name-only workspace.
    * @returns the created workspace id.
    */
-  async create(name: string): Promise<string | undefined> {
+  async create(name: string, repoUrl?: string): Promise<string | undefined> {
     const trimmed = name.trim()
     if (trimmed === '') {
       this.store.set({ ...this.store.getSnapshot(), error: this.t('errorNameRequired') })
       return undefined
     }
+    const cleanedRepoUrl = repoUrl?.trim()
     this.store.set({ ...this.store.getSnapshot(), working: true, error: undefined })
     try {
-      const created = await this.api.createWorkspace(trimmed)
+      const created = await this.api.createWorkspace(trimmed, cleanedRepoUrl === '' ? undefined : cleanedRepoUrl)
       const current = this.store.getSnapshot()
       this.store.set({ ...current, working: false, workspaces: [created, ...current.workspaces] })
       await this.select(created.id)
@@ -348,6 +425,33 @@ export class CollabWorkspacesController {
       await this.api.removeMember(selectedId, userId)
       const current = this.store.getSnapshot()
       this.store.set({ ...current, working: false, members: current.members.filter(member => member.userId !== userId) })
+      return true
+    } catch (error) {
+      this.store.set({ ...this.store.getSnapshot(), working: false, error: this.foldWireError(error) })
+      return false
+    }
+  }
+
+  /**
+   * Delete a workspace by id (the section row's options menu); drops the
+   * record from the list and, if it was selected, clears the detail like
+   * `deleteSelected`.
+   * @param workspaceId - the collab workspace to delete.
+   * @returns whether the deletion applied.
+   */
+  async delete(workspaceId: string): Promise<boolean> {
+    this.store.set({ ...this.store.getSnapshot(), working: true, error: undefined })
+    try {
+      await this.api.deleteWorkspace(workspaceId)
+      const current = this.store.getSnapshot()
+      this.store.set({
+        ...current,
+        working: false,
+        workspaces: current.workspaces.filter(workspace => workspace.id !== workspaceId),
+        ...(current.selectedId === workspaceId
+          ? { selectedId: undefined, myRole: undefined, members: [], invitations: [] }
+          : {}),
+      })
       return true
     } catch (error) {
       this.store.set({ ...this.store.getSnapshot(), working: false, error: this.foldWireError(error) })

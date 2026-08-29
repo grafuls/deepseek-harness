@@ -35,6 +35,18 @@ export interface WorkspaceRecord {
   members: WorkspaceMember[]
   createdAt: string
   updatedAt: string
+  /**
+   * Git repository URL the workspace was bootstrapped from, when the creator
+   * supplied one at create time.
+   */
+  repoUrl?: string
+  /**
+   * Absolute path of the cloned repository backing this workspace, when it was
+   * bootstrapped from a repository. The clone directory is the workspace's
+   * working directory: mounting the collab workspace opens it, and the collab
+   * membership gate scopes paths beneath it to members.
+   */
+  clonePath?: string
 }
 
 /**

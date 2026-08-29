@@ -1022,6 +1022,7 @@ function workspaceView(workspace: Workspace): WorkspaceView {
     sessionIds: [...workspace.sessionIds],
     createdAt: workspace.createdAt,
     updatedAt: workspace.updatedAt,
+    ...(workspace.collab === undefined ? {} : { collab: { workspaceId: workspace.collab.workspaceId } }),
   }
 }
 
@@ -1035,6 +1036,7 @@ function changedWorkspaceView(workspaceId: string, value: unknown): WorkspaceVie
     sessionIds: [...record.sessionIds],
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
+    ...(record.collab === undefined ? {} : { collab: { workspaceId: record.collab.workspaceId } }),
   }
 }
 

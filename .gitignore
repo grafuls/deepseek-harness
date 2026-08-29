@@ -34,8 +34,10 @@ apps/web/dist/
 .artifacts/
 .dsh-build/
 .playwright-mcp/
+.playwright-browsers/
 .orig
 .worktrees/
 worktrees/
 .agents/worktrees/
 .typert-*/
+repos/

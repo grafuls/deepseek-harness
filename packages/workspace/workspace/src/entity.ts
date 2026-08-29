@@ -98,12 +98,27 @@ export class WorkspaceEntity implements Workspace {
     return this.record.updatedAt
   }
 
+  get collab(): { workspaceId: string } | undefined {
+    return this.record.collab
+  }
+
   get sessionIds(): readonly SessionId[] {
     return this.record.sessionIds.filter(id => this.host.sessionPath(id) === this.record.path)
   }
 
   async setTitle(title: string): Promise<void> {
     await this.mutate(record => ({ ...record, title }))
+  }
+
+  /**
+   * Stamp the collab-origin marker: this workspace is the Host mount of the
+   * collaborative workspace named, so browsing surfaces keep it out of the
+   * local section. Callers (the registry's canonical-path create) decide when
+   * a re-stamp is needed; matching mounts are resolved before this is called.
+   * @param workspaceId - the collab workspace this Host mount belongs to.
+   */
+  async markCollab(workspaceId: string): Promise<void> {
+    await this.mutate(record => ({ ...record, collab: { workspaceId } }))
   }
 
   async attachSession(sessionId: SessionId): Promise<void> {

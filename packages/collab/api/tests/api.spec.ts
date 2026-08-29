@@ -13,12 +13,13 @@ import { Context } from '@deepseek-ai/cordis'
 import { UserId } from '@deepseek-ai/dsh-collab-users'
 import { CollabAuth, type OidcGateway } from '@deepseek-ai/dsh-collab-auth'
 import { CollabUsers } from '@deepseek-ai/dsh-collab-users'
-import { CollabWorkspaces } from '@deepseek-ai/dsh-collab-workspaces'
+import { CollabWorkspaces, WorkspaceId } from '@deepseek-ai/dsh-collab-workspaces'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createCollabWorkspaceAccess } from '../src/access-gate.ts'
 import { apply, COLLAB_AUTH_LOGIN_PATH, COLLAB_AUTH_LOGOUT_PATH, COLLAB_AUTH_SESSION_PATH } from '../src/index.ts'
 import { dispatchCollabEndpoint, workspaceDataDir } from '../src/dispatch.ts'
 import { collabError } from '../src/errors.ts'
+import type { NativeCommandRunner } from '@deepseek-ai/dsh-native-command'
 import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { CollabMountedWorkspaceView, CollabWorkspaceView } from '../src/types.ts'
 
@@ -46,7 +47,18 @@ interface Booted {
   root: string
   admin: { userId: string; email: string; name: string; globalRole: 'admin' | 'member' }
   member: { userId: string; email: string; name: string; globalRole: 'admin' | 'member' }
+  /** The injecting repo-clone harness: records each `git clone` and can fail the next one. */
+  cloner: ClonerHarness
   dispose: () => Promise<void>
+}
+
+/** A controllable stand-in for the `git clone` runner the dispatch reads. */
+interface ClonerHarness {
+  runner: NativeCommandRunner
+  /** Recorded `git clone` shorthand calls as { repoUrl, target }. */
+  calls: Array<{ repoUrl: string; target: string }>
+  /** Make the next clone fail with a git-style stderr. */
+  fail: (message?: string) => void
 }
 
 const boots: Booted[] = []
@@ -57,6 +69,28 @@ afterEach(async () => {
     rmSync(boot.root, { recursive: true, force: true })
   }
 })
+
+/**
+ * A fake `git clone` runner: records the target, succeeds by default, and
+ * rejects on demand, so creating a repo-backed workspace never touches the
+ * network.
+ */
+function fakeCloner(): ClonerHarness {
+  const calls: Array<{ repoUrl: string; target: string }> = []
+  let failing: string | undefined
+  const runner: NativeCommandRunner = async (_command, args, _signal) => {
+    calls.push({ repoUrl: args[1]!, target: args[2]! })
+    if (failing !== undefined) {
+      throw Object.assign(new Error(`git: ${failing}`), { stderr: `fatal: ${failing}` })
+    }
+    return { stdout: '', stderr: '' }
+  }
+  return {
+    runner,
+    calls,
+    fail: (message = 'repository not found') => { failing = message },
+  }
+}
 
 interface GatewayOverrides {
   /** The OIDC gateway to inject; defaults to the deterministic fake. */
@@ -79,6 +113,10 @@ async function bootServices(overrides: GatewayOverrides = {}): Promise<Booted> {
       ? {}
       : { redirectUri: 'http://localhost:3080/api/collab/auth/callback' }),
   })
+  // The dispatch reads the repo-clone runner as the optional `collabRepoCloner`
+  // service; install the fake so repo-backed creates never run real git.
+  const cloner = fakeCloner()
+  ctx.provide('collabRepoCloner', cloner.runner)
   const adminRec = await ctx.collabUsers.findOrCreateByGoogle({
     sub: 'google-1',
     email: 'owen@example.com',
@@ -106,6 +144,7 @@ async function bootServices(overrides: GatewayOverrides = {}): Promise<Booted> {
     root,
     admin,
     member,
+    cloner,
     dispose: () => ctx.fiber.dispose(),
   }
   boots.push(boot)
@@ -147,7 +186,7 @@ function fakeWorkspaceRegistry(dir: string): {
     sessionIds: string[]
     setTitle: (title: string) => Promise<void>
   }
-  createCalls: Array<{ path: string; title?: string }>
+  createCalls: Array<{ path: string; title?: string; collabWorkspaceId?: string }>
   addConflict: (id: string, title: string) => void
 } {
   let title = 'Team'
@@ -161,12 +200,16 @@ function fakeWorkspaceRegistry(dir: string): {
     setTitle: async (next: string) => { title = next },
   }
   const others: Array<{ id: string; title: string }> = []
-  const createCalls: Array<{ path: string; title?: string }> = []
+  const createCalls: Array<{ path: string; title?: string; collabWorkspaceId?: string }> = []
   const createdPaths = new Set<string>()
   const registry = {
     list: () => [{ id: entity.id, title }, ...others],
-    create: async (path: string, wanted?: string): Promise<typeof entity> => {
-      createCalls.push({ path, ...(wanted === undefined ? {} : { title: wanted }) })
+    create: async (path: string, wanted?: string, collabWorkspaceId?: string): Promise<typeof entity> => {
+      createCalls.push({
+        path,
+        ...(wanted === undefined ? {} : { title: wanted }),
+        ...(collabWorkspaceId === undefined ? {} : { collabWorkspaceId }),
+      })
       // The real registry is idempotent by canonical path: the title is seated
       // only at first create, never re-applied on reuse.
       if (!createdPaths.has(path)) {
@@ -216,6 +259,61 @@ describe('collab/workspace methods', () => {
     expectCollabError(nonString, 'collab-bad-request')
   })
 
+  it('clones a repository into a per-workspace directory and records it', async () => {
+    const boot = await bootServices()
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', {
+      name: 'Product',
+      repoUrl: ' https://github.com/example/product.git ',
+    })) as CollabWorkspaceView
+    // The clone landed under the default clone root, prefixed with the repo name.
+    const clonePath = join(boot.ctx.collabWorkspaces.root, 'workspaces', `product-${created.id}`)
+    expect(boot.cloner.calls).toEqual([{ repoUrl: 'https://github.com/example/product.git', target: clonePath }])
+    // The workspace's data directory and mount resolve to the clone.
+    const dir = value(await call(boot, boot.admin, 'collab/workspace.dir', { workspaceId: created.id })) as { dir: string }
+    expect(dir.dir).toBe(clonePath)
+    const fake = fakeWorkspaceRegistry(clonePath)
+    fake.register(boot.ctx)
+    const mounted = value(await call(boot, boot.admin, 'collab/workspace.open', { workspaceId: created.id })) as CollabMountedWorkspaceView
+    expect(mounted.dir).toBe(clonePath)
+    expect(mounted.workspace).toMatchObject({ path: clonePath, title: 'Product' })
+    expect(fake.createCalls).toEqual([{ path: clonePath, title: 'Product', collabWorkspaceId: created.id }])
+  })
+
+  it('rejects a non-string repository URL', async () => {
+    const boot = await bootServices()
+    const bad = await call(boot, boot.admin, 'collab/workspace.create', { name: 'Product', repoUrl: 42 })
+    expectCollabError(bad, 'collab-bad-request')
+    const blank = await call(boot, boot.admin, 'collab/workspace.create', { name: 'Product', repoUrl: '   ' })
+    expectCollabError(blank, 'collab-bad-request')
+    expect(boot.cloner.calls).toEqual([])
+  })
+
+  it('clones into the configured clone directory when the cloneDir setting is set', async () => {
+    const boot = await bootServices()
+    const clonesRoot = join(boot.root, 'configured-clones')
+    // A settings provider is absent from this unit lane; stand one in so the
+    // dispatch resolves the configured clone root instead of the default.
+    boot.ctx.provide('settings', { get: () => ({ cloneDir: clonesRoot }) } as never)
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', {
+      name: 'Product',
+      repoUrl: 'https://github.com/example/product.git',
+    })) as CollabWorkspaceView
+    expect(boot.cloner.calls).toEqual([{ repoUrl: 'https://github.com/example/product.git', target: join(clonesRoot, `product-${created.id}`) }])
+  })
+
+  it('fails as collab-clone-failed when the repository cannot be cloned, creating no workspace', async () => {
+    const boot = await bootServices()
+    boot.cloner.fail('repository not found')
+    const failed = await call(boot, boot.admin, 'collab/workspace.create', {
+      name: 'Product',
+      repoUrl: 'https://github.com/example/missing.git',
+    })
+    expectCollabError(failed, 'collab-clone-failed')
+    expect((failed as { error: { message: string } }).error.message).toContain('repository not found')
+    const listed = value(await call(boot, boot.admin, 'collab/workspace.list', {})) as CollabWorkspaceView[]
+    expect(listed).toEqual([])
+  })
+
   it('reads a workspace only for members', async () => {
     const boot = await bootServices()
     const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Team' })) as CollabWorkspaceView
@@ -253,7 +351,7 @@ describe('collab/workspace methods', () => {
     const mounted = value(await call(boot, boot.admin, 'collab/workspace.open', { workspaceId: created.id })) as CollabMountedWorkspaceView
     expect(mounted.dir).toBe(dir)
     expect(mounted.workspace).toMatchObject({ workspaceId: 'host-ws-1', path: dir, title: 'Team', sessionIds: [] })
-    expect(fake.createCalls).toEqual([{ path: dir, title: 'Team' }])
+    expect(fake.createCalls).toEqual([{ path: dir, title: 'Team', collabWorkspaceId: created.id }])
   })
 
   it('mounts idempotently and re-asserts the collab title over a host rename', async () => {
@@ -940,10 +1038,30 @@ describe('collab workspace access gate', () => {
   it('falls back to the raw root while it is not yet present on disk', () => {
     const absent = join(mkdtempSync(join(tmpdir(), 'dsh-collab-gate-')), 'absent')
     const gate = createCollabWorkspaceAccess({
-      collabWorkspaces: { root: absent, memberOf: () => undefined },
+      collabWorkspaces: { root: absent, memberOf: () => undefined, workspaceHolding: () => undefined },
     } as unknown as Context)
     expect(gate.collabRoot).toBe(absent)
     expect(gate.allow({ userId: 'u', email: 'e', globalRole: 'member' as const }, join(absent, 'workspaces', 'beta', 'f'))).toBe(false)
     expect(gate.allow({ userId: 'u', email: 'e', globalRole: 'member' as const }, join(absent, '..', 'elsewhere'))).toBe(true)
+  })
+
+  it('scopes a repo-backed workspace cloned outside the data root to its members', async () => {
+    const boot = await bootServices()
+    // A record whose clone lives under a separate clone root (as the settings-
+    // configured clone directory would place it) resolves through the records,
+    // not the default `<root>/workspaces` layout.
+    const clonePath = join(boot.root, 'clones', 'repo-ws')
+    await boot.ctx.collabWorkspaces.create('member', UserId(boot.member.userId), 'Product', {
+      id: WorkspaceId('repo-ws'),
+      repoUrl: 'https://github.com/example/product.git',
+      clonePath,
+    })
+    const gate = createCollabWorkspaceAccess(boot.ctx)
+    expect(gate.allow(boot.member, clonePath)).toBe(true)
+    expect(gate.allow(boot.member, join(clonePath, 'src', 'index.ts'))).toBe(true)
+    const stranger = { userId: 'no-such-user', email: 'ghost@example.com', globalRole: 'member' as const }
+    expect(gate.allow(stranger, clonePath)).toBe(false)
+    // Paths outside every collab clone stay Host-owned.
+    expect(gate.allow(stranger, join(boot.root, 'plain-workspace'))).toBe(true)
   })
 })

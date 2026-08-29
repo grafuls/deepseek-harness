@@ -23,6 +23,19 @@
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
 }
 
+/* The creation dialog: a focused surface above the panel/section backdrop,
+   sized for the name and repository URL inputs plus the action row. */
+.createDialog {
+  width: min(420px, calc(100vw - 48px));
+  padding: 20px;
+  border-radius: 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: 0 12px 48px var(--dsw-alias-bg-mask-3);
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+}
+
 .header {
   display: flex;
   align-items: center;
@@ -113,6 +126,13 @@
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.createForm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .input {

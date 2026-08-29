@@ -38,7 +38,7 @@ export function LoginGate({ useCollabGate, signIn, signInError, t }: LoginGatePr
   return (
     <div className={css.backdrop} role="dialog" aria-modal="true" aria-labelledby="collab-login-title">
       <div className={css.card}>
-        <div className={css.brand}>DeepSeek Harness</div>
+        <div className={css.brand}>DeepQiip</div>
         <h1 id="collab-login-title" className={css.title}>{t('title')}</h1>
         <p className={css.hint}>{t('hint')}</p>
         {signInError !== undefined && (

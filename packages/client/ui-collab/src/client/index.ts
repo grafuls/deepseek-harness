@@ -9,15 +9,26 @@
  */
 
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SettingsScope, SettingsScopeSpec } from '@deepseek-ai/dsh-client-runtime/client'
 // Type-only: pulls the ui-layout and ui-workspace SlotMap augmentations
 // (shell.overlay, sidebar.workspaces.collab) into this program; the client
 // bundle emits no request for either.
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
+// Type-only: pulls the settings shell's SlotMap merge and the settingsScope
+// Context merge (settings.section, ctx.settingsScope) into this program.
+import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import { CollabSection } from './CollabSection.tsx'
+import { CollabSettingsSection, type CollabSettingsInjected } from './CollabSettingsSection.tsx'
+import {
+  COLLAB_SETTINGS_NAMESPACE,
+  CollabSettingsController,
+  createCollabSettingsStore,
+  decodeCollabSettings,
+} from './collab-settings-store.ts'
 import { CollabApi } from './contract.ts'
 import { CollabWorkspacesController } from './controller.ts'
 import { NS, en, zh, type CollabKey } from './locales.ts'
@@ -26,7 +37,7 @@ import { WorkspacesPanel, type CollabWorkspacesInjected } from './WorkspacesPane
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
-    /** The collab workspaces section and manager copy. */
+    /** The collab workspaces section, manager, and settings copy. */
     'collab.ui': CollabKey
   }
 }
@@ -36,7 +47,13 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
  * for the collab RPC, the runtime Workspace face for switching into a mounted
  * collab workspace, the locale registry.
  */
-export const inject = ['slots', 'connection', 'workspaces', 'locale']
+export const inject = ['slots', 'connection', 'workspaces', 'sessions', 'locale']
+
+/**
+ * The settings-shell scope binder, read optionally so a composition that
+ * omits the settings surface still loads (the section simply never appears).
+ */
+type SettingsScopeBinder = { bind<T>(spec: SettingsScopeSpec<T>): SettingsScope<T> }
 
 /**
  * Client plugin body: build the collab RPC surface and one shared store, then
@@ -58,7 +75,12 @@ export function apply(ctx: ClientContext): void {
       select: (workspaceId) => { void controller.select(workspaceId) },
       openManager: (workspaceId) => { controller.openManager(workspaceId) },
       openWorkspace: (workspaceId) => { void controller.openWorkspace(workspaceId) },
-      create: (name) => { void controller.create(name) },
+      mountAll: () => { void controller.mountAll() },
+      open: (sessionId) => { ctx.sessions.open(sessionId) },
+      delete: (workspaceId) => { void controller.delete(workspaceId) },
+      setGroupBy: (mode) => { controller.setGroupBy(mode) },
+      setOrderBy: (mode) => { controller.setOrderBy(mode) },
+      create: (name, repoUrl) => controller.create(name, repoUrl).then(id => id !== undefined),
       invite: (email, role) => { void controller.invite(email, role) },
       revokeInvitation: (invitationId) => { void controller.revokeInvitation(invitationId) },
       acceptInvitation: (invitationId) => { void controller.acceptInvitation(invitationId) },
@@ -70,6 +92,9 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-collab: workspaces manager dictionaries')
   ctx.effect(() => {
     void controller.refreshAvailability()
+    // Keep the list and the invitations accept surface live: pending invites
+    // show up in an already-open page without requiring a reload.
+    controller.startAutoRefresh()
     // Both surfaces share one store handle; each waits on its slot's
     // declaration (sidebar.workspaces.collab from ui-workspace,
     // shell.overlay from ui-layout) so apply order across those owners is
@@ -87,6 +112,37 @@ export function apply(ctx: ClientContext): void {
         inject: injected,
       }, WorkspacesPanel)),
     ]
-    return () => { for (const dispose of disposers) { dispose() } }
+    return () => {
+      controller.stopAutoRefresh()
+      for (const dispose of disposers) { dispose() }
+    }
   }, 'ui-collab: workspaces manager')
+  ctx.effect(() => {
+    // The settings section is optional: it registers only after the settings
+    // shell declares `settings.section` (which implies the settingsScope
+    // provider is active), so a composition without the settings surface never
+    // stages it. The scope binding tears the section's subscription down with
+    // this fiber.
+    const scopeBinding = ctx.get('settingsScope', false) as SettingsScopeBinder | undefined
+    if (scopeBinding === undefined) return () => {}
+    const scope = scopeBinding.bind({ namespace: COLLAB_SETTINGS_NAMESPACE, decode: decodeCollabSettings })
+    const settingsStore = createCollabSettingsStore()
+    const settingsController = new CollabSettingsController(scope, settingsStore)
+    const settingsInjected = (): CollabSettingsInjected => ({
+      controller: settingsController,
+      hooks: { collabSettings: settingsStore },
+    })
+    const disposer = ctx.slots.inject('settings.section', () => ctx.slots.register({
+      name: 'settings.section',
+      id: 'collab',
+      order: 20,
+      label: () => t('settingsNav'),
+      locale: NS,
+      inject: settingsInjected,
+    }, CollabSettingsSection))
+    return () => {
+      disposer()
+      settingsController.disconnect()
+    }
+  }, 'ui-collab: collab settings section')
 }

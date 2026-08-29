@@ -33,6 +33,12 @@ export interface WorkspaceView {
   createdAt: string
   /** ISO-8601 last-mutation instant. */
   updatedAt: string
+  /**
+   * Collab-origin marker: present exactly when this workspace is a Host mount
+   * of a collaborative workspace, carrying that collab workspace's id.
+   * Browsing surfaces keep these mounts out of the local Workspaces list.
+   */
+  collab?: { workspaceId: string }
 }
 
 /** Workspace-domain unary methods (the map keys workspace.* of RpcMethodMap). */

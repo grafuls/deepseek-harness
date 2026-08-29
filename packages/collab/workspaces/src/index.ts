@@ -14,8 +14,9 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
@@ -138,6 +139,21 @@ export interface WorkspaceRegistrySnapshot {
 }
 
 /**
+ * Repository-bootstrap options for {@link CollabWorkspaces.create}. The caller
+ * mints the workspace id (it must exist before the clone target is named) and
+ * performs the clone itself; this service records the result atomically with
+ * the record, so a record never references a clone that was never created.
+ */
+export interface CreateWorkspaceOptions {
+  /** Workspace id to mint the record with; defaults to a fresh UUID. */
+  id?: WorkspaceId
+  /** Git repository URL the workspace was bootstrapped from. */
+  repoUrl?: string
+  /** Absolute path of the cloned repository backing the workspace. */
+  clonePath?: string
+}
+
+/**
  * Durable collab workspace registry. Startup loads or mints the
  * `workspaces.json` document; every mutation is serialized behind one
  * operation tail and committed with an atomic write before the change event
@@ -203,6 +219,25 @@ export class CollabWorkspaces extends Service {
   }
 
   /**
+   * The workspace whose cloned repository directory contains `path`, if any.
+   * The collab membership gate uses this to scope the Host plane: a session
+   * working directory or workspace path beneath a recorded clone directory
+   * resolves to its workspace, so the gate can decide membership instead of
+   * treating the clone as an unowned Host path. The comparison uses the real
+   * path of each recorded clone directory so Host-plane canonical paths match.
+   * @param path - a Host-plane workspace directory or session working directory.
+   * @returns the workspace id owning the containing clone, or undefined.
+   */
+  workspaceHolding(path: string): WorkspaceId | undefined {
+    for (const record of this.workspaces.values()) {
+      if (record.clonePath === undefined) continue
+      const base = canonicalOf(record.clonePath)
+      if (path === base || path.startsWith(`${base}${sep}`)) return record.id
+    }
+    return undefined
+  }
+
+  /**
    * Synchronous per-member lookup.
    * @param workspaceId - the workspace to inspect.
    * @param userId - the member to find.
@@ -239,24 +274,39 @@ export class CollabWorkspaces extends Service {
 
   /**
    * Create a workspace. Any authenticated user may create one; the creator
-   * becomes the owner and its first `admin` member.
+   * becomes the owner and its first `admin` member. Repository-bootstrap
+   * options record a clone the caller already produced (see
+   * {@link CreateWorkspaceOptions}), so the record and its backing directory
+   * commit atomically or not at all.
    * @param actorGlobalRole - the acting user's global role (needs `workspace.create`).
    * @param actorId - the creating user.
    * @param name - display name (trimmed; must not be empty).
+   * @param options - optional repository-bootstrap facts and an explicit id.
    * @returns the new workspace.
    */
-  async create(actorGlobalRole: GlobalRole, actorId: UserId, name: string): Promise<WorkspaceRecord> {
+  async create(
+    actorGlobalRole: GlobalRole,
+    actorId: UserId,
+    name: string,
+    options: CreateWorkspaceOptions = {},
+  ): Promise<WorkspaceRecord> {
     authorizeGlobal(actorGlobalRole, 'workspace.create')
     return this.enqueue(async () => {
       const trimmed = name.trim()
       if (trimmed === '') throw new Error('collab workspace name must not be empty')
+      const id = options.id ?? WorkspaceId(randomUUID())
+      if (this.workspaces.has(id)) {
+        throw new Error(`collab workspace id '${id}' already exists`)
+      }
       const record: WorkspaceRecord = {
-        id: WorkspaceId(randomUUID()),
+        id,
         name: trimmed,
         ownerId: actorId,
         members: [{ userId: actorId, role: 'admin', joinedAt: now() }],
         createdAt: now(),
         updatedAt: now(),
+        ...(options.repoUrl === undefined ? {} : { repoUrl: options.repoUrl }),
+        ...(options.clonePath === undefined ? {} : { clonePath: options.clonePath }),
       }
       await this.persist([...this.workspaces.values(), record], [...this.invitations.values()])
       this.workspaces.set(record.id, record)
@@ -652,6 +702,20 @@ export class CollabWorkspaces extends Service {
 
 function now(): string {
   return new Date().toISOString()
+}
+
+/**
+ * Resolve a recorded clone directory to its canonical form, falling back to
+ * the recorded path when the directory is absent or the file system resists.
+ * @param path - absolute clone directory stored on the record.
+ * @returns the real path when resolvable, else the recorded path.
+ */
+function canonicalOf(path: string): string {
+  try {
+    return realpathSync.native(path)
+  } catch {
+    return path
+  }
 }
 
 export default CollabWorkspaces

@@ -13,14 +13,18 @@ import type { WorkspaceId } from '@deepseek-ai/dsh-collab-workspaces'
 import type { UserId } from '@deepseek-ai/dsh-collab-users'
 
 interface WorkspaceRecord {
-  id: WorkspaceId          // random UUID
+  id: WorkspaceId          // random UUID (or an explicit id supplied at bootstrap)
   name: string
   ownerId: UserId          // creator; always an admin member
   members: { userId: UserId; role: 'admin' | 'developer'; joinedAt: string }[]
   createdAt: string        // ISO-8601
   updatedAt: string
+  repoUrl?: string         // git repository URL the workspace was bootstrapped from
+  clonePath?: string       // absolute cloned-repository directory backing the workspace
 }
 ```
+
+创建者可以把工作区从 git 仓库引导启动：`create(role, id, name, { id, repoUrl, clonePath })` 把克隆路径与记录原子地写在一起。注册表自己从不克隆——调用方产出克隆并把事实交给记录——因此记录绝不会引用一个从未创建的克隆。`workspaceHolding(path)` 把位于任何已记录克隆目录之下的 Host 平面路径解析到它的工作区，这正是让 collab 成员资格门能把克隆工作目录限定到成员的原因。
 
 ## 所有权与成员规则
 

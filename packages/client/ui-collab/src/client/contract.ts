@@ -203,12 +203,19 @@ export class CollabApi {
   }
 
   /**
-   * Create a workspace; the caller becomes its owner and admin.
+   * Create a workspace; the caller becomes its owner and admin. An optional
+   * repository URL bootstraps the workspace from a clone: the server clones
+   * the repository into its clone directory and opens the clone as the
+   * workspace.
    * @param name - workspace display name.
+   * @param repoUrl - git repository URL to clone as the workspace; omit for a name-only workspace.
    * @returns the new workspace view.
    */
-  createWorkspace(name: string): Promise<CollabWorkspaceView> {
-    return this.request('collab/workspace.create', { name })
+  createWorkspace(name: string, repoUrl?: string): Promise<CollabWorkspaceView> {
+    return this.request('collab/workspace.create', {
+      name,
+      ...(repoUrl === undefined ? {} : { repoUrl }),
+    })
   }
 
   /**

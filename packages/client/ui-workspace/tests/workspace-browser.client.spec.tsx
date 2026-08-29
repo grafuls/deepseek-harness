@@ -156,7 +156,7 @@ describe('WorkspaceBrowser', () => {
       useSessions: hook(sessions),
       useWorkspaces: hook(workspaceState([workspace('alpha', ['alpha-s']), workspace('beta', ['beta-s'])])),
     })
-    expect(screen.getByText('工作区')).toBeTruthy()
+    expect(screen.getByText('公共工作区')).toBeTruthy()
     expect(screen.getByText('alpha')).toBeTruthy()
     // Sessions hidden while their group is folded.
     expect(screen.queryByText('alpha-s')).toBeNull()
@@ -182,13 +182,33 @@ describe('WorkspaceBrowser', () => {
     expect(screen.getByRole('menuitem', { name: '手动排序' }).hasAttribute('disabled')).toBe(false)
     fireEvent.click(screen.getByRole('menuitem', { name: '按工作区' }))
     expect(b.store.getSnapshot().groupBy).toBe('workspace')
-    expect(screen.getByText('工作区')).toBeTruthy()
+    expect(screen.getByText('公共工作区')).toBeTruthy()
 
     // Escape closes the menu without picking.
     fireEvent.click(screen.getByRole('button', { name: '视图选项' }))
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByRole('menu')).toBeNull()
     expect(b.store.getSnapshot().groupBy).toBe('workspace')
+  })
+
+  it('keeps collab-origin workspaces and their sessions out of grouped and flat renderings', () => {
+    const collab = { ...workspace('team', ['collab-s']), collab: { workspaceId: 'cw-1' } }
+    const local = workspace('local', ['local-s'])
+    const b = mount({
+      useSessions: hook(sessionState([summary('collab-s', 3), summary('local-s', 1)])),
+      useWorkspaces: hook(workspaceState([collab, local])),
+    })
+    // Grouped: the collab folder renders nowhere and its session stays hidden.
+    expect(screen.getByText('local')).toBeTruthy()
+    expect(screen.queryByText('team')).toBeNull()
+    expect(screen.queryByText('collab-s')).toBeNull()
+
+    // Flat: the collab session is absent from the flattened list.
+    fireEvent.click(screen.getByRole('button', { name: '视图选项' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '单列表' }))
+    expect(b.store.getSnapshot().groupBy).toBe('flat')
+    expect(screen.queryByText('collab-s')).toBeNull()
+    expect(screen.getByText('local-s')).toBeTruthy()
   })
 
   it('persists flat-list drag order locally and applies Last updated within that account', async () => {
@@ -784,7 +804,7 @@ describe('WorkspaceBrowser', () => {
       const expandSidebar = vi.fn()
       const b = mount({ wide: false, expandSidebar })
       // No wide chrome in rail state.
-      expect(screen.queryByText('工作区')).toBeNull()
+      expect(screen.queryByText('公共工作区')).toBeNull()
       expect(screen.queryByPlaceholderText('搜索会话…')).toBeNull()
       fireEvent.click(screen.getByRole('button', { name: '搜索会话' }))
       expect(expandSidebar).toHaveBeenCalledTimes(1)

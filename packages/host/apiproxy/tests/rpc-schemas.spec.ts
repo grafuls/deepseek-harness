@@ -363,6 +363,22 @@ describe('workspace domain schemas', () => {
     expect(() => workspaceListValueSchema.parse({ items: [view] })).toThrow()
   })
 
+  it('keeps the collab-origin marker through unary and changed-frame validation', () => {
+    // Client validation strips unknown keys by default; the marker must survive
+    // both the workspace.list row and the host/workspace-changed frame or a
+    // collab mount misclassifies as local (sessions surface under the public
+    // browsing region instead of the collab section).
+    const collabView = { ...view, collab: { workspaceId: 'collab-7' } }
+    expect(workspaceViewSchema.parse(collabView).collab).toEqual({ workspaceId: 'collab-7' })
+    expect(workspaceListValueSchema.parse({ items: [collabView], archivedSessionIds: [] }).items[0]?.collab)
+      .toEqual({ workspaceId: 'collab-7' })
+    expect(
+      hostFrameSchema.parse({ type: 'host/workspace-changed', workspace: collabView }),
+    ).toMatchObject({ type: 'host/workspace-changed', workspace: { collab: { workspaceId: 'collab-7' } } })
+    // The marker is validated, not passed through blindly.
+    expect(() => workspaceViewSchema.parse({ ...collabView, collab: { workspaceId: 42 } })).toThrow()
+  })
+
   it('archiveSession request/value carry the id and the full updated set', () => {
     expect(workspaceArchiveSessionRequestSchema.parse({ sessionId: 's1' }).sessionId).toBe('s1')
     expect(() => workspaceArchiveSessionRequestSchema.parse({})).toThrow()

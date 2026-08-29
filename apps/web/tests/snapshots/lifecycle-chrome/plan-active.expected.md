@@ -4,7 +4,7 @@
 - button "New session":
   - img
   - text: New Session
-- text: Workspaces
+- text: Public Workspaces
 - button "Search sessions":
   - img
 - textbox "Search sessions..."

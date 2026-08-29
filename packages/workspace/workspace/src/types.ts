@@ -51,6 +51,14 @@ export interface Workspace {
   readonly sessionIds: readonly SessionId[]
 
   /**
+   * Collab-origin marker: present exactly when this workspace is a Host mount
+   * of a collaborative workspace, carrying that collab workspace's id. Local
+   * workspaces over arbitrary directories have none. Presence lets browsing
+   * surfaces keep collab mounts out of the local section.
+   */
+  readonly collab: { workspaceId: string } | undefined
+
+  /**
    * Replace the display title durably.
    * @param title - New title; any string, duplicates across workspaces allowed.
    * @returns resolution after durability.

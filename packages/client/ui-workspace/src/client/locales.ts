@@ -8,7 +8,7 @@
 export const zh = {
   'group.ungrouped': '未分组',
   'session.new': '新会话',
-  'section.workspaces': '工作区',
+  'section.workspaces': '公共工作区',
   'section.sessions': '会话',
   'viewOptions.label': '视图选项',
   'groupBy.label': '分组方式',
@@ -77,7 +77,7 @@ export type WorkspaceKey = keyof typeof zh
 export const en = {
   'group.ungrouped': 'Ungrouped',
   'session.new': 'New Session',
-  'section.workspaces': 'Workspaces',
+  'section.workspaces': 'Public Workspaces',
   'section.sessions': 'Sessions',
   'viewOptions.label': 'View options',
   'groupBy.label': 'Group by',

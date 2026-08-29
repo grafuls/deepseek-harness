@@ -43,7 +43,11 @@ Collab API 网关：一个函数插件，把共享的 harness 进程转变为 Go
 | `collab/users.setGlobalRole` | 提升/降级账号（`admin`/`member`）；仅实例管理员 |
 | `collab/users.setDisabled` | 禁用/启用账号；仅实例管理员 |
 
-错误折叠到封闭的 `RpcError` 代码集：授权拒绝（服务 RBAC）为 `collab-forbidden`，未知 workspace 为 `collab-not-found`，畸形的线上字段或其他服务失败为 `collab-bad-request`，缺少主机服务（组合中没有工作区注册表）为 `collab-internal`，重新断言与另一个主机工作区标题冲突的 collab 名称为 `collab-name-conflict`。每个端点在线上边界完成校验，然后委托给所属服务，由服务负责持久化与 RBAC。
+错误折叠到封闭的 `RpcError` 代码集：授权拒绝（服务 RBAC）为 `collab-forbidden`，未知 workspace 为 `collab-not-found`，畸形的线上字段或其他服务失败为 `collab-bad-request`，缺少主机服务（组合中没有工作区注册表）为 `collab-internal`，重新断言与另一个主机工作区标题冲突的 collab 名称为 `collab-name-conflict`，仓库后端工作区克隆失败为 `collab-clone-failed`。每个端点在线上边界完成校验，然后委托给所属服务，由服务负责持久化与 RBAC。
+
+## 仓库后端的工作区
+
+`collab/workspace.create` 接受 `repoUrl`；省略或传空字符串即创建仅命名的工作区。非空仓库地址会让网关把仓库克隆到本地目录并把克隆结果注册为该工作区的数据，而不是实体化一个全新的空数据目录。克隆目标是 `<cloneRoot>/<repoName>-<workspaceId>`，其中 `<workspaceId>` 是生成的工作区 id，`<repoName>` 是净化成文件系统安全组件后的仓库名（方便管理员一眼认出克隆源自哪个仓库），`<cloneRoot>` 在 `collab` 设置命名空间的 `cloneDir` 被设置时取其值，否则取 collab 数据根下的 `workspaces` 目录。克隆经由 collab 本地的无 shell `git clone` 运行（spawn 时不给子进程 stdin 并设置 `GIT_TERMINAL_PROMPT=0`，因此用户无权访问的仓库会以 git 的 stderr 快速失败，而不是停在凭据提示上等待），超时为十分钟；`collab/workspace.open` 与 `collab/workspace.dir` 对于仓库后端记录解析克隆路径，因此成员共享克隆出的工作树作为所挂载工作区的数据。克隆失败会删除不完整的目标、不注册任何记录，并以 `collab-clone-failed` 应答。访问门通过 collab `workspaceHolding` 关系把克隆目录与数据根目录一视同仁，因此非成员对隐藏克隆下路径的请求会被拒绝。
 
 ## Host 平面按成员资格划定作用域
 
@@ -51,7 +55,7 @@ collab 装配体还为 Host 工作区平面挂载了成员资格决策。在每�
 
 ## 配置
 
-本插件不接收任何配置；所有调优都位于其挂载的 collab 服务中（`dsh-collab-*` 根目录、OAuth 客户端、Cookie 策略）。
+本插件的唯一字段是仓库克隆的组合回退：`cloneDir` 为运行时 `collab` 设置命名空间的 `cloneDir` 值（默认仓库克隆目录）播种初始值，启动后该值由用户通过「协作工作区」设置页拥有。其余所有调优都位于其挂载的 collab 服务中（`dsh-collab-*` 根目录、OAuth 客户端、Cookie 策略）。
 
 ```yaml
 - id: collab-users
@@ -71,6 +75,11 @@ collab 装配体还为 Host 工作区平面挂载了成员资格决策。在每�
     baseUrl: http://localhost:3080
 - id: collab-api
   name: '@deepseek-ai/dsh-collab-api'
+  config:
+    # Optional: default directory for cloning repository-backed workspaces
+    # before the user overrides it through the settings page. Empty (the
+    # default) clones under the collab data root's `workspaces` directory.
+    cloneDir: !!js dshHomePath('collab/clones')
 ```
 
 ## Model Experience
@@ -89,3 +98,4 @@ The package contributes nothing to model requests, so it cannot invalidate cache
 - **两条实时回显携带隐藏会话 id 但不携带会话内容** —— `host()` 的归档会话回显与 `mux()` 的任务/队列/问题基线是进程全局的，因此仍会携带调用者看不见的 collab 会话的工作区 id、会话 id 或任务状态；它们不携带任何会话内容，而枚举表面（`workspace.list`、`sessions.list`/`search`、`history`、`fork`）已被完全划定作用域。
 - **成员资格在请求时与流打开时取样** —— `host()`/`mux()` 流在打开时捕获的主体在该流生命周期内保持不变，因此成员资格的授予或撤销作用于新的请求与新的流，而不是已经推送的帧。
 - **`loader.await()` 不代表 collab 表面已就绪** —— 依赖方的激活在树报告加载完成之后还有一个 tick 才落定，因此就绪消费者应先探测 `/api/collab/auth/session` 再发起请求（真实组合测试正是这么做的）。
+- **删除移除记录但不移除数据** —— `collab/workspace.delete` 会注销工作区，但把它的克隆（或数据）目录留在磁盘上，因此已删除仓库后端工作区的工作树对主机进程仍然可达。用同一个地址重新创建工作区会在新的以 id 命名的目录里实体化一个全新克隆。

@@ -572,6 +572,58 @@ describe('WorkspaceRegistry create and lookup', () => {
   })
 })
 
+describe('WorkspaceRegistry collab-origin marker', () => {
+  it('marks a create as a collab mount and persists the marker', async () => {
+    const dir = await makeDir('collab-create')
+    const { registry, pool } = await harness()
+    const workspace = await registry.create(dir, 'Shared', 'collab-1')
+    expect(workspace.collab).toEqual({ workspaceId: 'collab-1' })
+    expect(storedRecord(pool, workspace.id).collab).toEqual({ workspaceId: 'collab-1' })
+  })
+
+  it('leaves local creates unmarked', async () => {
+    const dir = await makeDir('local-create')
+    const { registry } = await harness()
+    const workspace = await registry.create(dir)
+    expect(workspace.collab).toBeUndefined()
+  })
+
+  it('never unmarks an existing mount through an unmarked re-create', async () => {
+    const dir = await makeDir('remain-collab')
+    const { registry } = await harness()
+    const workspace = await registry.create(dir, 'Shared', 'collab-1')
+    expect(await registry.create(dir)).toBe(workspace)
+    expect(workspace.collab).toEqual({ workspaceId: 'collab-1' })
+  })
+
+  it('stamps a collab marker onto a local record re-resolved by a mount', async () => {
+    const dir = await makeDir('adopted-collab')
+    const { registry } = await harness()
+    const local = await registry.create(dir, 'Local name')
+    expect(local.collab).toBeUndefined()
+    const mounted = await registry.create(dir, 'Shared', 'collab-2')
+    expect(mounted).toBe(local)
+    expect(local.collab).toEqual({ workspaceId: 'collab-2' })
+  })
+
+  it('keeps a matching collab stamp write-free on repeated collab re-mounts', async () => {
+    const dir = await makeDir('stable-collab')
+    const { registry } = await harness()
+    const first = await registry.create(dir, 'Shared', 'collab-1')
+    const again = await registry.create(dir, 'Shared', 'collab-1')
+    expect(again).toBe(first)
+    expect(first.collab).toEqual({ workspaceId: 'collab-1' })
+  })
+
+  it('re-stamps the marker when a mount resolves to a different collab record', async () => {
+    const dir = await makeDir('restamp-collab')
+    const { registry } = await harness()
+    await registry.create(dir, 'Shared', 'collab-a')
+    const mounted = await registry.create(dir, 'Shared', 'collab-b')
+    expect(mounted.collab).toEqual({ workspaceId: 'collab-b' })
+  })
+})
+
 describe('Workspace registry ordering', () => {
   it('moves a workspace before an anchor or to the end and restores that order after restart', async () => {
     const firstDir = await makeDir('order-first')

@@ -13,14 +13,18 @@ import type { WorkspaceId } from '@deepseek-ai/dsh-collab-workspaces'
 import type { UserId } from '@deepseek-ai/dsh-collab-users'
 
 interface WorkspaceRecord {
-  id: WorkspaceId          // random UUID
+  id: WorkspaceId          // random UUID (or an explicit id supplied at bootstrap)
   name: string
   ownerId: UserId          // creator; always an admin member
   members: { userId: UserId; role: 'admin' | 'developer'; joinedAt: string }[]
   createdAt: string        // ISO-8601
   updatedAt: string
+  repoUrl?: string         // git repository URL the workspace was bootstrapped from
+  clonePath?: string       // absolute cloned-repository directory backing the workspace
 }
 ```
+
+A creator may bootstrap a workspace from a git repository: `create(role, id, name, { id, repoUrl, clonePath })` records the clone path atomically with the record. The registry never clones itself — the caller produces the clone and hands the record the facts — so a record never references a clone that was never created. `workspaceHolding(path)` resolves a Host-plane path beneath any recorded clone directory to its workspace, which is what lets the collab membership gate scope cloned working directories to members.
 
 ## Ownership and membership rules
 

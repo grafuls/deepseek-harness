@@ -22,8 +22,9 @@ export interface CollabWorkspaceAccess {
   /**
    * Whether this principal may see and use the path. A path outside the collab
    * data root is always allowed (it is a Host-owned workspace); a path inside
-   * `<root>/workspaces/<workspaceId>[/…]` is allowed only when the principal is
-   * a member of that collab workspace.
+   * `<root>/workspaces/<workspaceId>[/…]` or inside any workspace's recorded
+   * clone directory is allowed only when the principal is a member of that
+   * collab workspace.
    * @param principal - the gate-resolved principal (a collab principal when the overlay is active).
    * @param path - the workspace directory or session cwd to decide on.
    * @returns whether the principal may see and use that path.
@@ -52,16 +53,33 @@ export function createCollabWorkspaceAccess(ctx: Context): CollabWorkspaceAccess
     }
     return canonical
   }
+  /**
+   * The workspace id a path resolves to: its id from the data-root layout, the
+   * record owning a recorded clone directory beneath it, or undefined when the
+   * path is a Host-owned path outside every collab workspace.
+   * @param path - the path to resolve.
+   * @returns the workspace id text, or undefined when not collab-scoped.
+   */
+  const resolveId = (path: string): string | undefined => {
+    const prefix = `${boundary()}${sep}workspaces${sep}`
+    if (path.startsWith(prefix)) {
+      const rest = path.slice(prefix.length)
+      const separator = rest.indexOf(sep)
+      return separator === -1 ? rest : rest.slice(0, separator)
+    }
+    // A repo-backed workspace clones into a directory that may live under a
+    // configured clone root outside the workspaces layout; the workspace
+    // record names it, so member-scoped paths resolve from the records.
+    const holding = ctx.collabWorkspaces.workspaceHolding(path)
+    return holding === undefined ? undefined : String(holding)
+  }
   return {
     get collabRoot() {
       return boundary()
     },
     allow(principal, path) {
-      const prefix = `${boundary()}${sep}workspaces${sep}`
-      if (!path.startsWith(prefix)) return true
-      const rest = path.slice(prefix.length)
-      const separator = rest.indexOf(sep)
-      const idText = separator === -1 ? rest : rest.slice(0, separator)
+      const idText = resolveId(path)
+      if (idText === undefined) return true
       const principalOf = (principal as CollabPrincipal | undefined)?.userId
       if (principalOf === undefined) return false
       return ctx.collabWorkspaces.memberOf(makeWorkspaceId(idText), principalOf) !== undefined

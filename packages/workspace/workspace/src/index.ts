@@ -148,19 +148,22 @@ export class WorkspaceRegistry extends Service {
    * Different canonical paths may share a display title.
    * @param path - Existing directory to own, in any path spelling.
    * @param title - Display title used only when a new record is created.
+   * @param collabWorkspaceId - When the mount belongs to a collaborative
+   *   workspace, its id; the workspace is then marked collab-origin (a
+   *   repeated mount re-stamps an unmarked or recreated record).
    * @returns the existing or newly durable workspace.
    */
   // TODO: `title` lost its last production caller when the gateway's
   // create-by-name branch was deleted
   // (.agents/notes/implemented/simplification/2026-07-31-one-route-to-add-a-workspace.md);
-  // drop the parameter with its @param clause and the `create(path, title?)`
+  // drop the parameter with its @param clause and the `create(path, title?, …)`
   // lines in this package's README pair.
-  async create(path: string, title?: string): Promise<Workspace> {
+  async create(path: string, title?: string, collabWorkspaceId?: string): Promise<Workspace> {
     const canonical = await realpathNormalize(path)
     if (!(await stat(canonical)).isDirectory()) {
       throw new Error(`cannot create a workspace at '${canonical}': path is not a directory`)
     }
-    return await this.enqueueOperation(() => this.createCanonical(canonical, title))
+    return await this.enqueueOperation(() => this.createCanonical(canonical, title, collabWorkspaceId))
   }
 
   /**
@@ -282,9 +285,20 @@ export class WorkspaceRegistry extends Service {
     return undefined
   }
 
-  private async createCanonical(canonical: string, title?: string): Promise<WorkspaceEntity> {
+  private async createCanonical(
+    canonical: string,
+    title?: string,
+    collabWorkspaceId?: string,
+  ): Promise<WorkspaceEntity> {
     for (const entity of this.entities.values()) {
-      if (entity.path === canonical) return entity
+      if (entity.path !== canonical) continue
+      // A collab mount re-resolving an unmarked (or differently marked) local
+      // record over the same directory must re-assert the collab origin, just
+      // like open re-asserts the title against the registry's uniqueness.
+      if (collabWorkspaceId !== undefined && entity.collab?.workspaceId !== collabWorkspaceId) {
+        await entity.markCollab(collabWorkspaceId)
+      }
+      return entity
     }
 
     const workspaceName = title ?? basename(canonical)
@@ -298,6 +312,7 @@ export class WorkspaceRegistry extends Service {
       sessionIds: [],
       createdAt: now,
       updatedAt: now,
+      ...(collabWorkspaceId === undefined ? {} : { collab: { workspaceId: collabWorkspaceId } }),
     }
     const entity = new WorkspaceEntity(this.host, id, record)
     this.entities.set(id, entity)

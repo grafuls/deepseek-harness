@@ -16,6 +16,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { collabError } from './errors.ts'
 import { createCollabWorkspaceAccess } from './access-gate.ts'
 import { dispatchCollabEndpoint } from './dispatch.ts'
+import { installCollabSettings } from './settings.ts'
 import type { CollabPrincipalView } from './types.ts'
 
 export const name = 'dsh-collab-api'
@@ -28,9 +29,16 @@ export const name = 'dsh-collab-api'
  */
 export const inject = ['webServer', 'connection', 'collabAuth', 'collabUsers', 'collabWorkspaces']
 
-/** Plugin config. */
-/** No plugin configuration: the collab assembly takes its tuning from the services it mounts. */
-export const Config = z.object({})
+/** Plugin config: the default clone directory for repo-backed workspaces. */
+export interface Config {
+  /** Default directory for cloning repositories that back new workspaces; empty uses the collab data root. */
+  cloneDir?: string
+}
+
+/** Namespace schema: all optional, an empty clone directory is the schema default. */
+export const Config = z.object({
+  cloneDir: z.string().default(''),
+})
 
 /** Sign-in entry (GET): redirects to the OIDC provider, served as an exact route. */
 export const COLLAB_AUTH_LOGIN_PATH = '/api/collab/auth/login'
@@ -40,7 +48,9 @@ export const COLLAB_AUTH_LOGOUT_PATH = '/api/collab/auth/logout'
 export const COLLAB_AUTH_SESSION_PATH = '/api/collab/auth/session'
 
 /** Plugin body: wire the auth fence, the collab RPC surface, and the HTTP routes. */
-export function apply(ctx: Context): void {
+export function apply(ctx: Context, config: Config = {}): void {
+  // Register the clone-directory settings namespace while a provider is mounted.
+  installCollabSettings(ctx, config)
   // Membership gate over the Host plane: collab-rooted workspaces and their
   // sessions are served only to their members. The Host reads it structurally
   // when present, so a single-user composition that omits this overlay never

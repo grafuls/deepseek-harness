@@ -15,6 +15,12 @@ export const UNGROUPED_KEY = ''
 /** Display label for the ungrouped bucket row. */
 export const UNGROUPED_LABEL = 'Ungrouped'
 
+/**
+ * The absent filter default for every derivation: a caller that would hide
+ * nothing passes no set. Never mutated.
+ */
+const NONE_HIDDEN: ReadonlySet<SessionId> = new Set()
+
 /** One top-level session row in a group or the flat list. */
 export interface SessionNode {
   id: SessionId
@@ -176,6 +182,7 @@ function groupByWorkspace(
   workspaces: readonly WorkspaceView[],
   archived: ReadonlySet<SessionId>,
   ungroupedOrder: readonly string[] | undefined,
+  hiddenSessionIds: ReadonlySet<SessionId>,
 ): Group[] {
   const groups: Group[] = []
   const accounted = new Set<SessionId>()
@@ -185,7 +192,7 @@ function groupByWorkspace(
       const summary = list.byId[id]
       if (summary === undefined) continue // account may lead the list pull; the row appears when the summary lands
       accounted.add(id)
-      if (!sessionVisible(summary, list.current, archived)) continue
+      if (hiddenSessionIds.has(id) || !sessionVisible(summary, list.current, archived)) continue
       members.push(summary)
     }
     groups.push(buildGroup(
@@ -196,7 +203,8 @@ function groupByWorkspace(
   const stray = list.ids
     .map(id => list.byId[id])
     .filter((s): s is SessionSummary =>
-      s !== undefined && !accounted.has(s.id) && sessionVisible(s, list.current, archived))
+      s !== undefined && !accounted.has(s.id) && !hiddenSessionIds.has(s.id)
+      && sessionVisible(s, list.current, archived))
   if (stray.length > 0) {
     groups.push(buildGroup(
       UNGROUPED_KEY,
@@ -239,6 +247,8 @@ function sessionNode(
  * @param workspaces - real workspaces in stable Host order.
  * @param archivedSessionIds - registry-global archive set.
  * @param view - local expansion arrays.
+ * @param hiddenSessionIds - sessions withheld from every group and the
+ *   ungrouped bucket (collab-origin mounts are browsed in the collab section).
  * @returns group sections in render order.
  */
 export function deriveGroups(
@@ -246,6 +256,7 @@ export function deriveGroups(
   workspaces: readonly WorkspaceView[],
   archivedSessionIds: readonly SessionId[],
   view: TreeView,
+  hiddenSessionIds: ReadonlySet<SessionId> = NONE_HIDDEN,
 ): GroupNode[] {
   const archived = new Set(archivedSessionIds)
   const expandedGroups = new Set(view.expandedGroups)
@@ -255,7 +266,7 @@ export function deriveGroups(
     : (workspaces.find(w => w.sessionIds.includes(list.current as SessionId))?.workspaceId as string | undefined)
         ?? UNGROUPED_KEY
   const groups: GroupNode[] = []
-  for (const g of groupByWorkspace(list, workspaces, archived, view.ungroupedOrder)) {
+  for (const g of groupByWorkspace(list, workspaces, archived, view.ungroupedOrder, hiddenSessionIds)) {
     const expanded = expandedGroups.has(g.key)
     groups.push({
       key: g.key,
@@ -279,18 +290,21 @@ export function deriveGroups(
  * (see {@link deriveSearchResults}).
  * @param list - sessions list snapshot.
  * @param archivedSessionIds - registry-global archive set.
+ * @param hiddenSessionIds - sessions withheld entirely (collab-origin mounts
+ *   are browsed in the collab section).
  * @returns flat rows in render order.
  */
 export function deriveFlat(
   list: SessionListState,
   archivedSessionIds: readonly SessionId[],
+  hiddenSessionIds: ReadonlySet<SessionId> = NONE_HIDDEN,
 ): SessionNode[] {
   const archived = new Set(archivedSessionIds)
   const descendants = indexSubagentDescendants(list.byId)
   const rows: SessionSummary[] = []
   for (const id of list.ids) {
     const s = list.byId[id]
-    if (s === undefined || !sessionVisible(s, list.current, archived)) continue
+    if (s === undefined || hiddenSessionIds.has(id) || !sessionVisible(s, list.current, archived)) continue
     rows.push(s)
   }
   rows.sort(byRecency)
@@ -316,6 +330,9 @@ export interface RelativeTime {
  * @param archivedSessionIds - registry-global archive set (members never match).
  * @param content - ranked Host content-search page.
  * @param limit - protocol-owned maximum merged row count.
+ * @param hiddenSessionIds - sessions withheld from local title/Workspace matches
+ *   and the merged content page (collab-origin mounts are browsed in the collab
+ *   section).
  * @returns bounded deduplicated flat rows and a refine-query hint bit.
  */
 export function deriveSearchResults(
@@ -325,6 +342,7 @@ export function deriveSearchResults(
   archivedSessionIds: readonly SessionId[],
   content: { items: readonly SessionSearchResultItem[]; hasMore: boolean },
   limit: number,
+  hiddenSessionIds: ReadonlySet<SessionId> = NONE_HIDDEN,
 ): SearchResultSet {
   const q = query.trim().toLowerCase()
   if (q === '') return { items: [], hasMore: false }
@@ -349,7 +367,8 @@ export function deriveSearchResults(
     const summary = list.byId[id]
     // Blank placeholders never match a query (their canonical title displays
     // localized, so matching it would tie search to one language).
-    if (summary === undefined || summary.blank || !sessionVisible(summary, list.current, archived)) continue
+    if (summary === undefined || summary.blank || hiddenSessionIds.has(id)
+      || !sessionVisible(summary, list.current, archived)) continue
     if (
       sessionTitle(summary).toLowerCase().includes(q)
       || labelOf(summary).toLowerCase().includes(q)
@@ -362,7 +381,7 @@ export function deriveSearchResults(
   const ordered: SessionSummary[] = []
   const included = new Set<SessionId>()
   const include = (summary: SessionSummary): void => {
-    if (included.has(summary.id)) return
+    if (included.has(summary.id) || hiddenSessionIds.has(summary.id)) return
     included.add(summary.id)
     ordered.push(summary)
   }

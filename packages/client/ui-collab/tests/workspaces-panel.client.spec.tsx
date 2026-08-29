@@ -6,7 +6,7 @@
  * fed directly (hooks bound by the renderer in production); no render
  * machinery here.
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CollabInvitationView, CollabMemberView, CollabWorkspaceView } from '../src/client/contract.ts'
 import { en } from '../src/client/locales.ts'
@@ -29,6 +29,11 @@ function actions(): CollabWorkspacesActions {
     select: vi.fn(),
     openManager: vi.fn(),
     openWorkspace: vi.fn(),
+    mountAll: vi.fn(),
+    open: vi.fn(),
+    delete: vi.fn(),
+    setGroupBy: vi.fn(),
+    setOrderBy: vi.fn(),
     create: vi.fn(),
     invite: vi.fn(),
     revokeInvitation: vi.fn(),
@@ -56,6 +61,8 @@ function readyState(overrides: Partial<CollabWorkspacesState> = {}): CollabWorks
     open: true,
     availability: 'ready',
     workspaces: [WORKSPACE],
+    groupBy: 'workspace',
+    orderBy: 'updated',
     invitationsForMe: [],
     selectedId: undefined,
     myRole: undefined,
@@ -81,7 +88,7 @@ describe('WorkspacesPanel', () => {
   it('lists the member workspaces with their role and member count', () => {
     panel(readyState())
     expect(screen.getByRole('dialog')).toBeTruthy()
-    expect(screen.getByText('Collaborative workspaces')).toBeTruthy()
+    expect(screen.getByText('Private Workspaces')).toBeTruthy()
     expect(screen.getByText('Alpha')).toBeTruthy()
     expect(screen.getByText('Admin')).toBeTruthy()
     expect(screen.getByText('2 members')).toBeTruthy()
@@ -110,15 +117,110 @@ describe('WorkspacesPanel', () => {
     expect(closePanel).toHaveBeenCalledTimes(1)
   })
 
-  it('creates a workspace from the inline form and clears the demo input', () => {
+  it('pops up the creation modal from the create button and cancels it', () => {
+    const create = vi.fn(async () => true)
+    panel(readyState(), { create })
+    fireEvent.click(screen.getByText('＋ New workspace'))
+    expect(screen.getByText('New collaborative workspace')).toBeTruthy()
+    expect(screen.getByPlaceholderText('Workspace name')).toBeTruthy()
+    expect(screen.getByPlaceholderText('GitHub repository URL (optional)')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByText('New collaborative workspace')).toBeNull()
+    expect(create).not.toHaveBeenCalled()
+    // The backdrop restores the page behind the dialog.
+    fireEvent.click(screen.getByText('＋ New workspace'))
+    expect(screen.getByText('New collaborative workspace')).toBeTruthy()
+  })
+
+  it('closes the creation modal through the header button and the backdrop', () => {
+    panel(readyState())
+    fireEvent.click(screen.getByText('＋ New workspace'))
+    const modal = screen.getByRole('dialog', { name: 'New collaborative workspace' })
+    // A mouseDown inside the dialog must not fall through to the backdrop.
+    fireEvent.mouseDown(modal)
+    expect(screen.getByText('New collaborative workspace')).toBeTruthy()
+    // The backdrop wraps the dialog; a mouseDown outside it closes the modal.
+    fireEvent.mouseDown(modal.parentElement ?? modal)
+    expect(screen.queryByText('New collaborative workspace')).toBeNull()
+    // Reopen and close through the header × button instead.
+    fireEvent.click(screen.getByText('＋ New workspace'))
+    const reopened = screen.getByRole('dialog', { name: 'New collaborative workspace' })
+    fireEvent.click(within(reopened).getByRole('button', { name: 'Close' }))
+    expect(screen.queryByText('New collaborative workspace')).toBeNull()
+  })
+
+  it('creates a workspace from the modal and closes it on success', async () => {
+    const create = vi.fn(async () => true)
+    panel(readyState(), { create })
+    fireEvent.click(screen.getByText('＋ New workspace'))
+    fireEvent.change(screen.getByPlaceholderText('Workspace name'), { target: { value: 'Beta' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    expect(create).toHaveBeenCalledWith('Beta')
+    await waitFor(() => { expect(screen.queryByText('New collaborative workspace')).toBeNull() })
+  })
+
+  it('creates a repository-backed workspace from the repository URL field', () => {
+    const create = vi.fn(async () => true)
+    panel(readyState(), { create })
+    fireEvent.click(screen.getByText('＋ New workspace'))
+    fireEvent.change(screen.getByPlaceholderText('Workspace name'), { target: { value: 'Product' } })
+    fireEvent.change(screen.getByPlaceholderText('GitHub repository URL (optional)'), { target: { value: ' https://github.com/example/product.git ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    expect(create).toHaveBeenCalledWith('Product', 'https://github.com/example/product.git')
+  })
+
+  it('keeps the modal open and shows a busy label while the create request is pending', async () => {
+    const create = vi.fn(() => new Promise<boolean>(() => {}))
+    panel(readyState(), { create })
+    fireEvent.click(screen.getByText('＋ New workspace'))
+    fireEvent.change(screen.getByPlaceholderText('Workspace name'), { target: { value: 'Beta' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => { expect(screen.getByText('Creating…')).toBeTruthy() })
+    expect(screen.getByRole('button', { name: 'Creating…' }).getAttribute('disabled')).not.toBeNull()
+    expect(screen.getByPlaceholderText('GitHub repository URL (optional)')).toBeTruthy()
+    expect(screen.getByText('New collaborative workspace')).toBeTruthy()
+  })
+
+  it('keeps the modal open and the error banner visible when creation fails', async () => {
+    const create = vi.fn(async () => false)
+    panel(readyState({ error: 'Could not clone the repository, please check the URL' }), { create })
+    fireEvent.click(screen.getByText('＋ New workspace'))
+    fireEvent.change(screen.getByPlaceholderText('Workspace name'), { target: { value: 'Product' } })
+    fireEvent.change(screen.getByPlaceholderText('GitHub repository URL (optional)'), { target: { value: 'https://github.com/example/private.git' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => { expect(create).toHaveBeenCalledWith('Product', 'https://github.com/example/private.git') })
+    // The panel banner and the modal banner both surface the store error.
+    const modal = within(screen.getByRole('dialog', { name: 'New collaborative workspace' }))
+    expect(modal.getByText('Could not clone the repository, please check the URL')).toBeTruthy()
+    expect(modal.getByPlaceholderText('GitHub repository URL (optional)')).toBeTruthy()
+  })
+
+  it('re-enables the modal when the create action rejects unexpectedly', async () => {
+    const create = vi.fn(async () => { throw new Error('boom') })
+    panel(readyState({ error: 'Something went wrong, please try again' }), { create })
+    fireEvent.click(screen.getByText('＋ New workspace'))
+    fireEvent.change(screen.getByPlaceholderText('Workspace name'), { target: { value: 'Beta' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    expect(create).toHaveBeenCalledWith('Beta')
+    // The failed action must not wedge the modal in Creating…: the button
+    // returns to Create and the dialog stays editable.
+    await waitFor(() => { expect(screen.getByRole('button', { name: 'Create' })).toBeTruthy() })
+    const modal = within(screen.getByRole('dialog', { name: 'New collaborative workspace' }))
+    expect(modal.getByPlaceholderText('Workspace name')).toBeTruthy()
+    expect(modal.getByText('Something went wrong, please try again')).toBeTruthy()
+  })
+
+  it('creates from the repository URL field with the Enter key', () => {
     const create = vi.fn()
     panel(readyState(), { create })
     fireEvent.click(screen.getByText('＋ New workspace'))
-    const input = screen.getByPlaceholderText('Workspace name')
-    fireEvent.change(input, { target: { value: 'Beta' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
-    expect(create).toHaveBeenCalledWith('Beta')
-    expect(screen.getByText('＋ New workspace')).toBeTruthy()
+    const repoInput = screen.getByPlaceholderText('GitHub repository URL (optional)')
+    fireEvent.change(screen.getByPlaceholderText('Workspace name'), { target: { value: 'Beta' } })
+    fireEvent.change(repoInput, { target: { value: 'https://github.com/example/product.git' } })
+    fireEvent.keyDown(repoInput, { key: 'a' })
+    expect(create).not.toHaveBeenCalled()
+    fireEvent.keyDown(repoInput, { key: 'Enter' })
+    expect(create).toHaveBeenCalledWith('Beta', 'https://github.com/example/product.git')
   })
 
   it('shows the workspace detail with invitations and invite form for an admin', () => {

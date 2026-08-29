@@ -448,3 +448,62 @@ describe('relativeTime', () => {
     expect(relativeTime(0, now)).toEqual({ unit: 'years', n: 1 })
   })
 })
+
+describe('hidden collab sessions', () => {
+  const hidden = (...ids: string[]) => new Set(ids.map(sid))
+
+  it('deriveGroups keeps hidden sessions out of both workspace and ungrouped buckets', () => {
+    const local = workspace('local', ['owned'])
+    const sessions = list(
+      summary('owned', 3, '/projects/local'),
+      summary('collab', 2, '/projects/team'),
+      summary('stray', 1, '/elsewhere'),
+    )
+    // Even when the collab workspace row is present and expanded, its sessions
+    // do not render; the hidden session also never falls into Ungrouped.
+    const collab = { ...workspace('team', ['collab']), collab: { workspaceId: 'cw-1' } }
+    const groups = deriveGroups(
+      sessions,
+      [local, collab],
+      noArchive,
+      view(['local', 'team', UNGROUPED_KEY], []),
+      hidden('collab'),
+    )
+    const sessionIds = groups.flatMap(group => group.sessions.map(node => node.id))
+    expect(sessionIds).toEqual(['owned', 'stray'])
+    expect(groups.find(group => group.key === UNGROUPED_KEY)?.sessionCount).toBe(1)
+  })
+
+  it('deriveGroups without the filter shows collab sessions (default set is empty)', () => {
+    const collab = { ...workspace('team', ['collab']), collab: { workspaceId: 'cw-1' } }
+    const groups = deriveGroups(list(summary('collab', 1, '/projects/team')), [collab], noArchive, view(['team']))
+    expect(groups[0]!.sessions.map(node => node.id)).toEqual(['collab'])
+  })
+
+  it('deriveFlat hides the pass-through collab sessions', () => {
+    const sessions = list(
+      summary('local', 3),
+      summary('collab', 2),
+      summary('child', 1),
+    )
+    const rows = deriveFlat(sessions, noArchive, hidden('collab'))
+    expect(rows.map(row => row.id)).toEqual(['local', 'child'])
+  })
+
+  it('deriveSearchResults hides title matches and merged content hits of hidden sessions', () => {
+    const localHit = summary('local-hit', 3)
+    localHit.displayTitle = 'Needle local'
+    const hiddenHit = summary('hidden-hit', 2)
+    hiddenHit.displayTitle = 'Needle hidden'
+    const result = deriveSearchResults(
+      list(localHit, hiddenHit),
+      [workspace('team', ['hidden-hit'])],
+      'needle',
+      noArchive,
+      { items: [{ sessionId: hiddenHit.id, snippet: 'needle body' }], hasMore: false },
+      10,
+      hidden('hidden-hit'),
+    )
+    expect(result.items.map(item => item.id)).toEqual([localHit.id])
+  })
+})

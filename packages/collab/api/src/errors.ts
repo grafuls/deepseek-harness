@@ -12,6 +12,7 @@ declare module '@deepseek-ai/dsh-host-apiproxy/api' {
     'collab-bad-request': {} // no details; the message names the invalid field
     'collab-internal': {} // no details; the message names the missing host service
     'collab-name-conflict': {} // no details; the message names the colliding title
+    'collab-clone-failed': {} // no details; the message names the repository and the git failure
   }
 }
 
@@ -22,6 +23,7 @@ export type CollabErrorCode =
   | 'collab-bad-request'
   | 'collab-internal'
   | 'collab-name-conflict'
+  | 'collab-clone-failed'
 
 /**
  * Build the failure branch of an RpcResult for one collab code.

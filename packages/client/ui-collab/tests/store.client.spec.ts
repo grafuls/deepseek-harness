@@ -11,6 +11,9 @@ describe('collab workspaces store', () => {
   it('starts closed, probing, and empty', () => {
     const store = createCollabWorkspacesStore()
     expect(store.getSnapshot()).toEqual(COLLAB_WORKSPACES_INITIAL)
+    // View options default to the local browser's grouped/recent presentation.
+    expect(store.getSnapshot().groupBy).toBe('workspace')
+    expect(store.getSnapshot().orderBy).toBe('updated')
   })
 
   it('publishes new snapshots to subscribers on set', () => {

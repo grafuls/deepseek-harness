@@ -16,6 +16,11 @@ import type {
   CollabWorkspaceView,
 } from './contract.ts'
 
+/** Collab list grouping mode, mirroring the local Workspaces browser's view options. */
+export type CollabGroupBy = 'workspace' | 'flat'
+/** Collab list order mode, mirroring the local Workspaces browser's view options. */
+export type CollabOrderBy = 'manual' | 'updated'
+
 /** The workspaces manager's serializable snapshot. */
 export interface CollabWorkspacesState {
   /** Whether the overlay panel is open. */
@@ -24,6 +29,10 @@ export interface CollabWorkspacesState {
   availability: CollabAvailability
   /** The signed-in member's workspace list. */
   workspaces: CollabWorkspaceView[]
+  /** Collab list grouping mode (view options): workspace rows or one flat list. */
+  groupBy: CollabGroupBy
+  /** Collab list order mode (view options): the server list order or creation recency. */
+  orderBy: CollabOrderBy
   /** Pending invitations addressed to the signed-in user (the accept surface). */
   invitationsForMe: CollabMyInvitationView[]
   /** The selected workspace id, absent before a selection. */
@@ -45,6 +54,8 @@ export const COLLAB_WORKSPACES_INITIAL: CollabWorkspacesState = {
   open: false,
   availability: 'checking',
   workspaces: [],
+  groupBy: 'workspace',
+  orderBy: 'updated',
   invitationsForMe: [],
   selectedId: undefined,
   myRole: undefined,

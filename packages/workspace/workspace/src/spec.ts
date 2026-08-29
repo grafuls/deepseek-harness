@@ -16,7 +16,11 @@ const workspaceId = z.string().transform(value => value as WorkspaceId)
 /**
  * Durable shape of one workspace record. `path` is the `fs.realpath` canon
  * stamped at create; `sessionIds` is the ordered ownership account (array
- * order is display order); timestamps are ISO-8601 strings.
+ * order is display order); timestamps are ISO-8601 strings. The optional
+ * `collab` marker is present exactly when the workspace is a Host mount of a
+ * collaborative workspace (created through the collab `open`), not a local
+ * workspace over an arbitrary directory; records written before the marker
+ * lack the key and parse as local.
  */
 export const workspaceRecord = z.object({
   path: z.string(),
@@ -24,6 +28,7 @@ export const workspaceRecord = z.object({
   sessionIds: z.array(z.string().transform(SessionId)),
   createdAt: z.string(),
   updatedAt: z.string(),
+  collab: z.object({ workspaceId: z.string() }).optional(),
 })
 
 /** One stored workspace record, inferred from {@link workspaceRecord}. */

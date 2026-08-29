@@ -10,8 +10,13 @@
 import { Context } from '@deepseek-ai/cordis'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { SlotRegistry } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SettingsScope, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RpcResult } from '@deepseek-ai/dsh-client-connection/client'
+import { CollabSettingsSection } from '../src/client/CollabSettingsSection.tsx'
+import type { CollabSettingsInjected } from '../src/client/CollabSettingsSection.tsx'
+import type { CollabSettingsValue } from '../src/client/collab-settings-store.ts'
 import { CollabSection } from '../src/client/CollabSection.tsx'
 import { NS } from '../src/client/locales.ts'
 import type { CollabWorkspacesInjected } from '../src/client/WorkspacesPanel.tsx'
@@ -39,7 +44,7 @@ function stubRpc(script: Record<string, Array<RpcResult<unknown>>> = {}) {
   return { seen, call }
 }
 
-async function bench() {
+async function bench(extraChildren: Record<string, unknown> = {}) {
   const ctx = new Context()
   await ctx.plugin(SlotRegistry).await()
   // The locale registry stands in for the locale plugin: browser-language
@@ -54,14 +59,18 @@ async function bench() {
       children: {
         'shell.overlay': { kind: 'list', scope: 'root' },
         'sidebar.workspaces.collab': { kind: 'single', scope: 'root' },
+        ...extraChildren,
       },
     } as never,
     () => null,
   )
   const { seen, call } = stubRpc({
     'collab/auth.status': [{ ok: true, value: { authenticated: true } }],
-    'collab/workspace.list': [{ ok: true, value: [] }, { ok: true, value: [] }],
-    'collab/workspace.myInvitations': [{ ok: true, value: [] }, { ok: true, value: [] }],
+    // One entry per refresh: the availability probe, then openPanel, openManager,
+    // and a direct refresh() in the actions lane.
+    'collab/workspace.list': [{ ok: true, value: [] }, { ok: true, value: [] }, { ok: true, value: [] }, { ok: true, value: [] }],
+    'collab/workspace.myInvitations': [{ ok: true, value: [] }, { ok: true, value: [] }, { ok: true, value: [] }, { ok: true, value: [] }],
+    'collab/workspace.delete': [{ ok: true, value: undefined }],
   })
   // The plugin resolves ctx.connection from the service store.
   ctx.provide('connection', { rpc: { call } } as never)
@@ -71,6 +80,9 @@ async function bench() {
     list: { getSnapshot: () => ({ items: [] }), subscribe: () => () => {} },
     startSession: vi.fn(),
   } as never)
+  // The plugin resolves the runtime Session face used to open a session from
+  // the collab section (never reached in these lanes).
+  ctx.provide('sessions', { open: vi.fn() } as never)
   return { ctx, slots, seen, locale }
 }
 
@@ -94,8 +106,8 @@ describe('ui-collab client plugin', () => {
     expect(() => { nodeApply() }).not.toThrow()
   })
 
-  it('declares the slot, connection, workspace and locale services it binds', () => {
-    expect(inject).toEqual(['slots', 'connection', 'workspaces', 'locale'])
+  it('declares the slot, connection, workspace, session and locale services it binds', () => {
+    expect(inject).toEqual(['slots', 'connection', 'workspaces', 'sessions', 'locale'])
   })
 
   it('registers the section and panel on their declared slots and tears both down', async () => {
@@ -111,33 +123,79 @@ describe('ui-collab client plugin', () => {
     expect(slots.entries('shell.overlay')).toHaveLength(0)
   })
 
+  it('registers the collab settings section on the settings surface and tears it down', async () => {
+    const { ctx, slots } = await bench({ 'settings.section': { kind: 'list', scope: 'root' } })
+    expect(slots.entries('settings.section')).toHaveLength(0)
+    const snapshot = { status: 'ready' as const, value: { cloneDir: '/clones' } as CollabSettingsValue, base: undefined, user: undefined, revision: 1, writable: true, mode: 'host' as const }
+    const listeners = new Set<() => void>()
+    const scope: SettingsScope<CollabSettingsValue> = {
+      getSnapshot: () => snapshot,
+      subscribe: (listener) => {
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+      set: async () => {},
+      unset: async () => {},
+    }
+    const bind = vi.fn((spec: { namespace: string; decode: unknown }) => {
+      void spec
+      return scope
+    })
+    ctx.provide('settingsScope', { bind } as never)
+    const fiber = ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
+    expect(bind).toHaveBeenCalledTimes(1)
+    const spec = bind.mock.calls[0]![0]
+    expect(spec.namespace).toBe('collab')
+    expect(typeof spec.decode).toBe('function')
+    expect(listeners.size).toBe(1)
+    const entries = slots.entries('settings.section')
+    expect(entries).toHaveLength(1)
+    expect(entries[0]!.component).toBe(CollabSettingsSection)
+    expect(entries[0]!.locale).toBe(NS)
+    // The nav label thunk and the inject face are read at render time by the
+    // settings shell; resolve them here to prove the section carries them.
+    expect(resolveSlotLabel(entries[0]!.options.label)).toBe('协作工作区')
+    const face = (entries[0]!.inject as unknown as () => CollabSettingsInjected)()
+    expect(face.hooks.collabSettings.getSnapshot()).toMatchObject({ status: 'ready', cloneDir: '/clones' })
+    await fiber.dispose()
+    // Fiber teardown unregisters the section and disconnects the scope.
+    expect(slots.entries('settings.section')).toHaveLength(0)
+    expect(listeners.size).toBe(0)
+  })
+
   it('registers bilingual manager dictionaries on the standard locale seat', async () => {
     const { ctx, slots, locale } = await bench()
-    await ctx.plugin({ inject: [...inject], apply }).await()
+    const fiber = ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
     // Copy rides the standard locale seat, not the business face.
     expect(slots.entries('sidebar.workspaces.collab')[0]!.locale).toBe(NS)
     expect(slots.entries('shell.overlay')[0]!.locale).toBe(NS)
     const t = locale.bind(NS)
-    expect(t('title')).toBe('协作工作区')
+    expect(t('title')).toBe('私有工作区')
     expect(t('memberCount', { count: '3' })).toBe('3 名成员')
     locale.setLocale('en')
     expect(t('workspaces')).toBe('Workspaces')
     expect(t('memberCount', { count: '3' })).toBe('3 members')
+    await fiber.dispose()
   })
 
   it('probes availability into the shared store on mount', async () => {
     const { ctx, slots, seen } = await bench()
-    await ctx.plugin({ inject: [...inject], apply }).await()
+    const fiber = ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
     await new Promise(resolve => setImmediate(resolve))
     expect(seen).toEqual(['collab/auth.status', 'collab/workspace.list', 'collab/workspace.myInvitations'])
     const section = slots.entries('sidebar.workspaces.collab')[0]!
     const face = (section.inject as unknown as () => CollabWorkspacesInjected)()
     expect(face.hooks.collabWorkspaces.getSnapshot().availability).toBe('ready')
+    await fiber.dispose()
   })
 
   it('exposes actions that drive the shared store from the inject face', async () => {
     const { ctx, slots } = await bench()
-    await ctx.plugin({ inject: [...inject], apply }).await()
+    const fiber = ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
     await new Promise(resolve => setImmediate(resolve))
     const entry = slots.entries('sidebar.workspaces.collab')[0]!
     const face = (entry.inject as unknown as () => CollabWorkspacesInjected)()
@@ -158,15 +216,29 @@ describe('ui-collab client plugin', () => {
     await vi.waitFor(() => { expect(store.getSnapshot().workspaces).toEqual([]) })
     face.actions.select('w1')
     await vi.waitFor(() => { expect(store.getSnapshot().error).toBeDefined() })
-    face.actions.create('Beta')
+    void face.actions.create('Beta')
     face.actions.invite('c@example.com', 'admin')
     face.actions.revokeInvitation('i1')
     face.actions.acceptInvitation('i1')
     face.actions.setMemberRole('u1', 'admin')
     face.actions.removeMember('u1')
     face.actions.openWorkspace('w1')
+    // mountAll materializes collab workspaces in the background (here: none);
+    // open routes a session into the runtime Session face.
+    const sessions = ctx.get('sessions') as unknown as { open: ReturnType<typeof vi.fn> }
+    face.actions.mountAll()
+    face.actions.open('s1' as SessionId)
+    expect(sessions.open).toHaveBeenCalledWith('s1')
+    // delete removes the workspace record by id through the collab endpoint.
+    face.actions.delete('w1')
+    await vi.waitFor(() => { expect(store.getSnapshot().working).toBe(false) })
+    face.actions.setGroupBy('flat')
+    face.actions.setOrderBy('manual')
+    expect(store.getSnapshot().groupBy).toBe('flat')
+    expect(store.getSnapshot().orderBy).toBe('manual')
     face.actions.deleteSelected()
     await vi.waitFor(() => { expect(store.getSnapshot().working).toBe(false) })
+    await fiber.dispose()
   })
 
   it('keeps the surfaces hidden when the collab surface is absent', async () => {
@@ -177,10 +249,13 @@ describe('ui-collab client plugin', () => {
       list: { getSnapshot: () => ({ items: [] }), subscribe: () => () => {} },
       startSession: vi.fn(),
     } as never)
-    await ctx.plugin({ inject: [...inject], apply }).await()
+    ctx.provide('sessions', { open: vi.fn() } as never)
+    const fiber = ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
     await new Promise(resolve => setImmediate(resolve))
     const section = slots.entries('sidebar.workspaces.collab')[0]!
     const face = (section.inject as unknown as () => CollabWorkspacesInjected)()
     expect(face.hooks.collabWorkspaces.getSnapshot().availability).toBe('hidden')
+    await fiber.dispose()
   })
 })

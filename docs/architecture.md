@@ -1,4 +1,4 @@
-# DeepSeek Harness Architecture
+# DeepQiip Architecture
 
 English | [中文](architecture.zh.md)
 

@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "DeepSeek Harness",
-  "short_name": "DSH",
+  "name": "DeepQiip",
+  "short_name": "DeepQiip",
   "start_url": "/",
   "scope": "/",
   "display": "fullscreen",

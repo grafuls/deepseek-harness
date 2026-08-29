@@ -20,6 +20,11 @@ export const workspaceViewSchema = z.object({
   sessionIds: z.array(sessionIdSchema),
   createdAt: z.string(),
   updatedAt: z.string(),
+  // The collab-origin marker must survive client-side validation: a collab
+  // mount's row carries it, and zod strips unknown keys by default, which
+  // would misclassify the mount as local (sessions surface in the public
+  // browsing region instead of the collab section).
+  collab: z.object({ workspaceId: z.string() }).optional(),
 }) satisfies z.ZodType<Wire<WorkspaceView>>
 
 /** workspace.list request payload (empty object literal). */

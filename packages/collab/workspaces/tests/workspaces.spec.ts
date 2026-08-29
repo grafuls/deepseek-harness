@@ -86,6 +86,38 @@ describe('create and reads', () => {
     await expect(ctx.collabWorkspaces.get('developer', carol.id, ws.id)).rejects.toThrow(/not a member/)
   })
 
+  it('records a repository bootstrap atomically with the record', async () => {
+    const { ctx } = await harness()
+    const alice = await user(ctx, 'sub-alice', 'alice@example.com', 'Alice')
+    const id = WorkspaceId('repo-ws-1')
+    const clonePath = join(root as string, 'clones', 'repo-ws-1')
+    const ws = await ctx.collabWorkspaces.create(alice.globalRole, alice.id, 'Product', {
+      id,
+      repoUrl: 'https://github.com/example/product.git',
+      clonePath,
+    })
+    expect(ws.id).toBe(id)
+    expect(ws.repoUrl).toBe('https://github.com/example/product.git')
+    expect(ws.clonePath).toBe(clonePath)
+    // The backing clone resolves as this workspace on the Host plane.
+    expect(ctx.collabWorkspaces.workspaceHolding(clonePath)).toBe(id)
+    expect(ctx.collabWorkspaces.workspaceHolding(join(clonePath, 'src', 'main.ts'))).toBe(id)
+    expect(ctx.collabWorkspaces.workspaceHolding(join(root as string, 'plain'))).toBeUndefined()
+    // A name-only workspace holds no clone.
+    const plain = await ctx.collabWorkspaces.create(alice.globalRole, alice.id, 'Plain')
+    expect(ctx.collabWorkspaces.workspaceHolding(join(root as string, 'plain'))).toBeUndefined()
+    expect(ctx.collabWorkspaces.workspaceHolding(join(root as string, 'workspaces', String(plain.id)))).toBeUndefined()
+  })
+
+  it('refuses a duplicate explicit workspace id', async () => {
+    const { ctx } = await harness()
+    const alice = await user(ctx, 'sub-alice', 'alice@example.com', 'Alice')
+    const id = WorkspaceId('taken-ws')
+    await ctx.collabWorkspaces.create(alice.globalRole, alice.id, 'First', { id })
+    await expect(ctx.collabWorkspaces.create(alice.globalRole, alice.id, 'Second', { id }))
+      .rejects.toThrow(/already exists/)
+  })
+
   it('a member can read their workspace', async () => {
     const { ctx } = await harness()
     const alice = await user(ctx, 'sub-alice', 'alice@example.com', 'Alice')

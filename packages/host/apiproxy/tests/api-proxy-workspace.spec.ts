@@ -320,6 +320,36 @@ describe('workspace.create', () => {
   })
 })
 
+describe('workspace collab-origin projection', () => {
+  it('marks only collab mounts on list and on the workspace-changed frame', async () => {
+    const { api, ctx, root } = await harness()
+    const localPath = stageDir(root, 'local')
+    await api.workspace.create(request({ path: localPath }))
+    const collabPath = stageDir(root, 'team')
+    const mounted = await ctx.workspaceRegistry.create(collabPath, 'Team', 'collab-7')
+
+    const abort = new AbortController()
+    const stream: AsyncIterator<RpcRequest<HostFrame>> =
+      api.events.host(request({}), abort.signal)[Symbol.asyncIterator]()
+    const changed = nextHostFrame(stream)
+    const items = expectOk(await api.workspace.list(request({}))).items
+    const local = items.find(item => item.title === 'local')
+    const collab = items.find(item => item.title === 'Team')
+    expect(local?.collab).toBeUndefined()
+    expect(collab).toMatchObject({ workspaceId: mounted.id, collab: { workspaceId: 'collab-7' } })
+
+    // A durable mutation over the mounted record re-emits the row; the changed
+    // frame must carry the marker too, so clients never see it unmarked.
+    await mounted.setTitle('Team Renamed')
+    const frame = await changed
+    expect(frame.payload).toMatchObject({
+      type: 'host/workspace-changed',
+      workspace: { workspaceId: mounted.id, title: 'Team Renamed', collab: { workspaceId: 'collab-7' } },
+    })
+    abort.abort()
+  })
+})
+
 describe('workspace.insertBefore', () => {
   it('commits the complete order, streams one order frame, and maps unknown ids', async () => {
     const { api, ctx, root } = await harness()

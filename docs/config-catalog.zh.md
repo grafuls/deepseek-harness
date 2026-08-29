@@ -494,7 +494,12 @@ export interface Config {
   clientSecret?: string
   /** Registered redirect URI (must match the Google console entry). */
   redirectUri?: string
-  /** Public base URL used to derive the redirect URI when omitted. */
+  /**
+   * Public base URL used to derive the redirect URI as `${baseUrl}${OIDC_CALLBACK_PATH}`.
+   * When both this and {@link Config.redirectUri} are omitted, each sign-in derives
+   * its redirect origin from the request, so a remote loopback-free deployment
+   * needs no origin configuration.
+   */
   baseUrl?: string
   /** HMAC secret signing session cookies; a dshHome-derived dev default when omitted. */
   secret?: string
@@ -518,14 +523,20 @@ export interface Config {
 export interface OidcGateway {
   /** Authorization endpoint family, for diagnostics. */
   readonly issuer: string
-  /** Build the authorization URL carrying the caller's `state` and `nonce`. */
-  authorizationUrl(state: string, nonce: string): Promise<string>
+  /**
+   * Build the authorization URL carrying the caller's `state` and `nonce`.
+   * @param state - anti-CSRF token echoed by the provider at the callback.
+   * @param nonce - replay-proof claim echoed by the provider at the callback.
+   * @param redirectUri - the redirect URI for this exchange; omitted to use the gateway's registered URI.
+   */
+  authorizationUrl(state: string, nonce: string, redirectUri?: string): Promise<string>
   /**
    * Validate a callback exchange (code, state, nonce) and return the
    * verified user. Throws when the exchange is invalid.
    * @param params - raw query/form parameters from the callback request.
+   * @param redirectUri - the same redirect URI this login started with, when the caller derived it; omitted for the registered URI.
    */
-  userFromCallback(params: Record<string, string>): Promise<OidcUserInfo>
+  userFromCallback(params: Record<string, string>, redirectUri?: string): Promise<OidcUserInfo>
 }
 
 /** Verified identity facts returned by an OIDC strategy for a successful login. */
@@ -543,7 +554,7 @@ export interface OidcUserInfo {
 }
 ```
 
-Source: [`packages/collab/auth/src/index.ts:63`](../packages/collab/auth/src/index.ts)
+Source: [`packages/collab/auth/src/index.ts:74`](../packages/collab/auth/src/index.ts)
 
 <a id="deepseek-aidsh-collab-users"></a>
 

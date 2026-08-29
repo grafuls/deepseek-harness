@@ -572,9 +572,15 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
-        signature: 'async loginUrl(redirectTo: string = \'/\'): Promise<string>',
+        signature: 'redirectUriFor(origin: string | undefined): string',
+        description: 'The redirect URI for one sign-in: the pinned URI when configured, else the request origin (or the loopback default when the request carries none).',
+        parameters: [{ name: 'origin', description: 'the request\'s `scheme://authority`, when present.' }],
+        returns: 'the redirect URI the provider must send the authorization code to.',
+      },
+      {
+        signature: 'async loginUrl(redirectTo: string = \'/\', origin?: string): Promise<string>',
         description: 'Begin a sign-in: stash an anti-CSRF challenge and return the provider\'s authorization URL.',
-        parameters: [{ name: 'redirectTo', description: 'where the browser lands after the callback (default `/`).' }],
+        parameters: [{ name: 'redirectTo', description: 'where the browser lands after the callback (default `/`).' }, { name: 'origin', description: 'the request\'s `scheme://authority`, when present, used to derive the redirect URI when no redirect URI is configured.' }],
         returns: 'the provider authorization URL carrying `state` and `nonce`.',
       },
       {
@@ -4076,7 +4082,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'OidcGateway',
-    declaration: 'export interface OidcGateway {\n    readonly issuer: string;\n    authorizationUrl(state: string, nonce: string): Promise<string>;\n    userFromCallback(params: Record<string, string>): Promise<OidcUserInfo>;\n}',
+    declaration: 'export interface OidcGateway {\n    readonly issuer: string;\n    authorizationUrl(state: string, nonce: string, redirectUri?: string): Promise<string>;\n    userFromCallback(params: Record<string, string>, redirectUri?: string): Promise<OidcUserInfo>;\n}',
   },
   {
     name: 'OidcUserInfo',

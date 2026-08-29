@@ -38,12 +38,22 @@ Collab auth service. Startup binds the Google OIDC strategy and the required col
 
 ```ts cordis-catalog
 /**
+ * The redirect URI for one sign-in: the pinned URI when configured, else the
+ * request origin (or the loopback default when the request carries none).
+ * @param origin - the request's `scheme://authority`, when present.
+ * @returns the redirect URI the provider must send the authorization code to.
+ */
+redirectUriFor(origin: string | undefined): string
+
+/**
  * Begin a sign-in: stash an anti-CSRF challenge and return the provider's
  * authorization URL.
  * @param redirectTo - where the browser lands after the callback (default `/`).
+ * @param origin - the request's `scheme://authority`, when present, used to
+ * derive the redirect URI when no redirect URI is configured.
  * @returns the provider authorization URL carrying `state` and `nonce`.
  */
-async loginUrl(redirectTo: string = '/'): Promise<string>
+async loginUrl(redirectTo: string = '/', origin?: string): Promise<string>
 
 /**
  * Finish a sign-in from the callback parameters: validate the exchange

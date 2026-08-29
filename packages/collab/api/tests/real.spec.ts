@@ -73,8 +73,10 @@ globals.__collabHostWorkspaces = async (ctx) => {
 }
 globals.__collabFakeGateway = {
   issuer: 'https://accounts.google.test',
-  async authorizationUrl(state: string, nonce: string): Promise<string> {
-    return `https://accounts.google.test/auth?state=${state}&nonce=${nonce}`
+  async authorizationUrl(state: string, nonce: string, redirectUri?: string): Promise<string> {
+    const params = new URLSearchParams({ state, nonce })
+    if (redirectUri !== undefined) params.set('redirect_uri', redirectUri)
+    return `https://accounts.google.test/auth?${params}`
   },
   async userFromCallback(params: Record<string, string>): Promise<{ sub: string; email: string; emailVerified: boolean; name: string }> {
     return params.code === 'oauth-owen'
@@ -219,7 +221,11 @@ async function waitForReady(base: string): Promise<void> {
 async function signIn(base: string, code: string): Promise<string> {
   const entry = await fetch(`${base}/api/collab/auth/login?redirectTo=%2Fapp`, { redirect: 'manual' })
   expect(entry.status).toBe(302)
-  const state = new URL(entry.headers.get('location')!).searchParams.get('state')!
+  const location = entry.headers.get('location')!
+  // The collab-auth row boots with no pinned origin, so the redirect URI is
+  // derived from this request's Host over the real connection.
+  expect(new URL(location).searchParams.get('redirect_uri')).toBe(`${base}/api/collab/auth/callback`)
+  const state = new URL(location).searchParams.get('state')!
   const callback = await fetch(`${base}/api/collab/auth/callback?code=${code}&state=${state}`, { redirect: 'manual' })
   expect(callback.status).toBe(302)
   expect(callback.headers.get('location')).toBe('/app')

@@ -17,6 +17,7 @@ declare const params: Record<string, string>
 declare const sessionToken: string
 
 await ctx.collabAuth.loginUrl('/workspaces')            // provider authorization URL
+await ctx.collabAuth.loginUrl('/workspaces', 'https://collab.example.com') // with a request origin for an unpinned redirect
 const outcome: LoginOutcome = await ctx.collabAuth.completeLogin(params) // { location, sessionToken, principal }
 ctx.collabAuth.resolve(sessionToken)                    // CollabPrincipal | undefined (needs cookie)
 ctx.collabAuth.cookieValue(sessionToken)                // the Set-Cookie value to emit
@@ -30,13 +31,15 @@ ctx.collabAuth.clearCookieValue()                       // the Set-Cookie value 
 | --- | --- | --- |
 | `clientId` | `''` | Google OAuth 2.0 client id (required for sign-in) |
 | `clientSecret` | `''` | Google OAuth 2.0 client secret (required for sign-in) |
-| `redirectUri` | `<baseUrl>/api/collab/auth/callback` | registered redirect URI, must match the Google console |
-| `baseUrl` | `http://localhost:3080` | public base URL used to derive the redirect URI |
+| `redirectUri` | `<baseUrl>/api/collab/auth/callback` when `baseUrl` is set, else `''` | pinned registered redirect URI, must match the Google console |
+| `baseUrl` | `''` (request-derived) | public base URL used to derive the redirect URI when `redirectUri` is unset |
 | `secret` | dev-only derivation from `dshHome` | HMAC key signing session cookies; set explicitly in production |
 | `sessionTtlSeconds` | `2592000` (30 days) | session cookie lifetime |
 | `secureCookies` | `false` | mark cookies `Secure` (set behind TLS termination) |
 | `scopes` | `['openid', 'profile', 'email']` | granted Google scopes |
 | `stateTtlMs` | `600000` (10 minutes) | authorization challenge lifetime |
+
+The `redirectUri` (or `baseUrl` from which it derives) pins the redirect origin; when both are omitted, each sign-in derives it from the sign-in request origin (`Host` authority plus the first `x-forwarded-proto` entry, else `http`), so a loopback-free remote deployment needs no origin configuration. The derived URI is carried by the authorization challenge and validated at the callback, and an explicit `redirectUri` always wins over the request. Register the public origin's `/api/collab/auth/callback` in the Google console, and — when the server is reached under a non-loopback name — let the `/api` trust fence trust that origin via `--trusted-host` (an IP-literal reach is derived automatically). The harness webserver does not terminate TLS; a terminating proxy's `x-forwarded-proto` supplies the `https` scheme, and `secureCookies: true` should follow behind TLS.
 
 The `secret` default is a deterministic dev-only derivation from the harness home so a localhost checkout works with no configuration. It is a password; deployments behind a real IdP must set `secret` (and `secureCookies`) explicitly.
 

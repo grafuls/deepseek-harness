@@ -28,14 +28,17 @@ class FakeOidcGateway implements OidcGateway {
   failExchange = false
   lastState = ''
   lastNonce = ''
+  lastRedirectUri = ''
 
-  async authorizationUrl(state: string, nonce: string): Promise<string> {
+  async authorizationUrl(state: string, nonce: string, redirectUri?: string): Promise<string> {
     this.lastState = state
     this.lastNonce = nonce
+    this.lastRedirectUri = redirectUri ?? ''
     return `https://fake.example.com/authorize?state=${state}&nonce=${nonce}`
   }
 
-  async userFromCallback(_params: Record<string, string>): Promise<OidcUserInfo> {
+  async userFromCallback(_params: Record<string, string>, redirectUri?: string): Promise<OidcUserInfo> {
+    this.lastRedirectUri = redirectUri ?? ''
     if (this.failExchange) throw new Error('bad authorization code')
     return { ...this.user }
   }
@@ -71,16 +74,22 @@ describe('session token machinery', () => {
       stateTtlMs: 5000,
     })
     expect(explicit.clientId).toBe('cid')
-    expect(explicit.redirectUri).toContain('/api/collab/auth/callback')
+    expect(explicit.redirectUri).toBe('http://localhost:3080/api/collab/auth/callback')
+    expect(explicit.redirectDependsOnRequest).toBe(false)
     expect(explicit.secret).toBe('explicit')
     expect(explicit.secureCookies).toBe(true)
     expect(explicit.sessionTtlSeconds).toBe(3600)
     expect(explicit.stateTtlMs).toBe(5000)
 
     const dev = resolveSpec({})
-    expect(dev.redirectUri).toBe('http://localhost:3080/api/collab/auth/callback')
+    expect(dev.redirectUri).toBe('')
+    expect(dev.redirectDependsOnRequest).toBe(true)
     expect(dev.secret).toContain('dev-only:')
     expect(dev.scopes).toContain('openid')
+
+    const derived = resolveSpec({ baseUrl: 'https://collab.example.com/' })
+    expect(derived.redirectUri).toBe('https://collab.example.com/api/collab/auth/callback')
+    expect(derived.redirectDependsOnRequest).toBe(false)
   })
 
   it('signs, verifies, and rejects tampered, wrong-key, malformed, and expired tokens', () => {
@@ -255,6 +264,53 @@ describe('sign-in flow', () => {
     const state = new URL(url).searchParams.get('state')!
     const nonce = new URL(url).searchParams.get('nonce')!
     await expect(ctx.collabAuth.completeLogin({ code: 'c2', state, nonce })).rejects.toThrow(/disabled/)
+  })
+})
+
+describe('request-derived redirect URI', () => {
+  it('derives the redirect URI from the login origin and threads it through the callback', async () => {
+    const { ctx, gateway } = await harness()
+    const url = await ctx.collabAuth.loginUrl('/workspaces', 'https://collab.example.com')
+    expect(gateway.lastRedirectUri).toBe('https://collab.example.com/api/collab/auth/callback')
+    const state = new URL(url).searchParams.get('state')!
+    const nonce = new URL(url).searchParams.get('nonce')!
+    const outcome = await ctx.collabAuth.completeLogin({ code: 'c', state, nonce })
+    expect(outcome.principal.email).toBe('alice@example.com')
+    // The exchange validated against the same derived redirect URI.
+    expect(gateway.lastRedirectUri).toBe('https://collab.example.com/api/collab/auth/callback')
+    expect(ctx.collabAuth.redirectDependsOnRequest).toBe(true)
+  })
+
+  it('falls back to the static loopback default when the login carries no origin', async () => {
+    const { ctx, gateway } = await harness()
+    await ctx.collabAuth.loginUrl('/')
+    expect(gateway.lastRedirectUri).toBe('http://localhost:3080/api/collab/auth/callback')
+    expect(ctx.collabAuth.redirectUri).toBe('http://localhost:3080/api/collab/auth/callback')
+  })
+
+  it('ignores the request origin when `redirectUri` is pinned', async () => {
+    const { ctx, gateway } = await harness({ redirectUri: 'https://auth.example.com/cb' })
+    await ctx.collabAuth.loginUrl('/', 'https://collab.example.com')
+    expect(gateway.lastRedirectUri).toBe('https://auth.example.com/cb')
+    expect(ctx.collabAuth.redirectDependsOnRequest).toBe(false)
+    expect(ctx.collabAuth.redirectUri).toBe('https://auth.example.com/cb')
+  })
+
+  it('derives from a pinned `baseUrl` and ignores the request origin', async () => {
+    const { ctx, gateway } = await harness({ baseUrl: 'https://auth.example.com' })
+    await ctx.collabAuth.loginUrl('/', 'https://elsewhere.example.com')
+    expect(gateway.lastRedirectUri).toBe('https://auth.example.com/api/collab/auth/callback')
+    expect(ctx.collabAuth.redirectDependsOnRequest).toBe(false)
+    expect(ctx.collabAuth.redirectUri).toBe('https://auth.example.com/api/collab/auth/callback')
+  })
+
+  it('resolves the redirect URI for empty, present, and missing request origins', async () => {
+    const { ctx } = await harness()
+    expect(ctx.collabAuth.redirectUri).toBe('http://localhost:3080/api/collab/auth/callback')
+    expect(ctx.collabAuth.redirectUriFor('https://collab.example.com'))
+      .toBe('https://collab.example.com/api/collab/auth/callback')
+    expect(ctx.collabAuth.redirectUriFor(undefined)).toBe('http://localhost:3080/api/collab/auth/callback')
+    expect(ctx.collabAuth.redirectUriFor('')).toBe('http://localhost:3080/api/collab/auth/callback')
   })
 })
 

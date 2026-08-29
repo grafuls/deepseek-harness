@@ -52,19 +52,30 @@ export class GoogleOidcGateway implements OidcGateway {
     return this.configPromise
   }
 
-  async authorizationUrl(state: string, nonce: string): Promise<string> {
+  /**
+   * Build the provider's authorization URL.
+   * @param state - anti-CSRF token echoed at the callback.
+   * @param nonce - replay-proof claim echoed at the callback.
+   * @param redirectUri - the redirect URI for this exchange; defaults to the registered one.
+   */
+  async authorizationUrl(state: string, nonce: string, redirectUri: string = this.redirectUri): Promise<string> {
     const config = await this.configuration()
     return buildAuthorizationUrl(config, {
-      redirect_uri: this.redirectUri,
+      redirect_uri: redirectUri,
       scope: this.scopes.join(' '),
       state,
       nonce,
     }).toString()
   }
 
-  async userFromCallback(params: Record<string, string>): Promise<OidcUserInfo> {
+  /**
+   * Validate a callback exchange and return the verified user.
+   * @param params - raw query/form parameters from the callback request.
+   * @param redirectUri - the same redirect URI this login started with; defaults to the registered one.
+   */
+  async userFromCallback(params: Record<string, string>, redirectUri: string = this.redirectUri): Promise<OidcUserInfo> {
     const config = await this.configuration()
-    const url = new URL(this.redirectUri)
+    const url = new URL(redirectUri)
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value)
     const checks: { expectedState?: string; expectedNonce?: string } = {}
     if (params.state !== undefined) checks.expectedState = params.state

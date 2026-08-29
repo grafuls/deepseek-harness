@@ -30,8 +30,10 @@ function fakeGateway(overrides: Partial<OidcGateway> = {}): OidcGateway {
 function defaultGateway(): OidcGateway {
   return {
     issuer: 'https://accounts.google.test',
-    async authorizationUrl(state: string, nonce: string): Promise<string> {
-      return `https://accounts.google.test/auth?state=${state}&nonce=${nonce}`
+    async authorizationUrl(state: string, nonce: string, redirectUri?: string): Promise<string> {
+      const params = new URLSearchParams({ state, nonce })
+      if (redirectUri !== undefined) params.set('redirect_uri', redirectUri)
+      return `https://accounts.google.test/auth?${params}`
     },
     async userFromCallback(): Promise<{ sub: string; email: string; emailVerified: boolean; name: string }> {
       return { sub: 'google-1', email: 'owen@example.com', emailVerified: true, name: 'Owen' }
@@ -59,6 +61,8 @@ afterEach(async () => {
 interface GatewayOverrides {
   /** The OIDC gateway to inject; defaults to the deterministic fake. */
   gateway?: OidcGateway
+  /** Omit the pinned redirect URI so each login derives it from the request origin. */
+  derivedRedirect?: boolean
 }
 
 async function bootServices(overrides: GatewayOverrides = {}): Promise<Booted> {
@@ -70,8 +74,10 @@ async function bootServices(overrides: GatewayOverrides = {}): Promise<Booted> {
     clientId: 'test-client',
     clientSecret: 'test-secret',
     secret: 'test-secret-signing-key',
-    redirectUri: 'http://localhost:3080/api/collab/auth/callback',
     gateway: overrides.gateway ?? fakeGateway(),
+    ...(overrides.derivedRedirect === true
+      ? {}
+      : { redirectUri: 'http://localhost:3080/api/collab/auth/callback' }),
   })
   const adminRec = await ctx.collabUsers.findOrCreateByGoogle({
     sub: 'google-1',
@@ -623,6 +629,52 @@ describe('plugin wiring', () => {
     const wrongMethodRes = fakeResponse()
     await logout.handler({ method: 'GET', url: COLLAB_AUTH_LOGOUT_PATH, headers: {} }, wrongMethodRes)
     expect(wrongMethodRes.statusCode).toBe(405)
+  })
+
+  it('derives the OAuth redirect URI from the login request origin when unpinned', async () => {
+    const { web, auth } = await bootPlugin({ derivedRedirect: true })
+    expect(auth.redirectDependsOnRequest).toBe(true)
+    const login = web.routes.find(route => route.path === COLLAB_AUTH_LOGIN_PATH)!
+    const loginRes = fakeResponse()
+    void login.handler({
+      method: 'GET',
+      url: COLLAB_AUTH_LOGIN_PATH,
+      headers: { host: 'collab.example.com', 'x-forwarded-proto': 'https, http' },
+    }, loginRes)
+    await flush()
+    expect(loginRes.statusCode).toBe(302)
+    expect(new URL(loginRes.locationHeader).searchParams.get('redirect_uri'))
+      .toBe('https://collab.example.com/api/collab/auth/callback')
+  })
+
+  it('falls back to plain HTTP (and a loopback default) without a forwarded scheme', async () => {
+    const { web } = await bootPlugin({ derivedRedirect: true })
+    const login = web.routes.find(route => route.path === COLLAB_AUTH_LOGIN_PATH)!
+    const httpRes = fakeResponse()
+    void login.handler({ method: 'GET', url: COLLAB_AUTH_LOGIN_PATH, headers: { host: 'collab.example.com' } }, httpRes)
+    await flush()
+    expect(new URL(httpRes.locationHeader).searchParams.get('redirect_uri'))
+      .toBe('http://collab.example.com/api/collab/auth/callback')
+
+    const noHostRes = fakeResponse()
+    void login.handler({ method: 'GET', url: COLLAB_AUTH_LOGIN_PATH, headers: {} }, noHostRes)
+    await flush()
+    expect(new URL(noHostRes.locationHeader).searchParams.get('redirect_uri'))
+      .toBe('http://localhost:3080/api/collab/auth/callback')
+  })
+
+  it('keeps the pinned redirect URI regardless of the login request origin', async () => {
+    const { web } = await bootPlugin()
+    const login = web.routes.find(route => route.path === COLLAB_AUTH_LOGIN_PATH)!
+    const loginRes = fakeResponse()
+    void login.handler({
+      method: 'GET',
+      url: COLLAB_AUTH_LOGIN_PATH,
+      headers: { host: 'collab.example.com', 'x-forwarded-proto': 'https' },
+    }, loginRes)
+    await flush()
+    expect(new URL(loginRes.locationHeader).searchParams.get('redirect_uri'))
+      .toBe('http://localhost:3080/api/collab/auth/callback')
   })
 
   it('supports the urlencoded POST callback and refuses a failed exchange', async () => {

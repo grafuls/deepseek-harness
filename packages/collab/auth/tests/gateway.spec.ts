@@ -35,6 +35,30 @@ describe('GoogleOidcGateway (offline via mocked openid-client)', () => {
     )
   })
 
+  it('builds the authorization URL with a derived redirect URI when one is supplied', async () => {
+    mocks.discovery.mockResolvedValue(fakeConfiguration())
+    mocks.buildAuthorizationUrl.mockReturnValue(new URL('https://accounts.google.com/o/oauth2/v2/auth'))
+    const gateway = new GoogleOidcGateway('cid', 'csecret', 'http://localhost:3080/api/collab/auth/callback')
+    await gateway.authorizationUrl('state-1', 'nonce-1', 'https://collab.example.com/api/collab/auth/callback')
+    expect(mocks.buildAuthorizationUrl).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ redirect_uri: 'https://collab.example.com/api/collab/auth/callback', state: 'state-1', nonce: 'nonce-1' }),
+    )
+  })
+
+  it('validates the exchange against a supplied derived redirect URI', async () => {
+    mocks.authorizationCodeGrant.mockResolvedValue({
+      claims: () => ({ sub: 'sub-4', email: 'd@example.com', email_verified: true, name: 'D' }),
+    })
+    const gateway = new GoogleOidcGateway('cid', 'csecret', 'http://localhost:3080/cb')
+    await gateway.userFromCallback({ code: 'c', state: 's', nonce: 'n' }, 'https://collab.example.com/api/collab/auth/callback')
+    const call = mocks.authorizationCodeGrant.mock.calls[0] as [unknown, URL, unknown] | undefined
+    expect(call).toBeDefined()
+    expect(call![1].origin).toBe('https://collab.example.com')
+    expect(call![1].pathname).toBe('/api/collab/auth/callback')
+    expect(call![1].searchParams.get('code')).toBe('c')
+  })
+
   it('surfaces a failed discovery once', async () => {
     mocks.discovery.mockRejectedValue(new Error('network down'))
     const gateway = new GoogleOidcGateway('cid', 'csecret', 'http://localhost:3080/cb')

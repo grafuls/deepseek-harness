@@ -47,12 +47,18 @@ export interface CollabPrincipal {
 export interface OidcGateway {
   /** Authorization endpoint family, for diagnostics. */
   readonly issuer: string
-  /** Build the authorization URL carrying the caller's `state` and `nonce`. */
-  authorizationUrl(state: string, nonce: string): Promise<string>
+  /**
+   * Build the authorization URL carrying the caller's `state` and `nonce`.
+   * @param state - anti-CSRF token echoed by the provider at the callback.
+   * @param nonce - replay-proof claim echoed by the provider at the callback.
+   * @param redirectUri - the redirect URI for this exchange; omitted to use the gateway's registered URI.
+   */
+  authorizationUrl(state: string, nonce: string, redirectUri?: string): Promise<string>
   /**
    * Validate a callback exchange (code, state, nonce) and return the
    * verified user. Throws when the exchange is invalid.
    * @param params - raw query/form parameters from the callback request.
+   * @param redirectUri - the same redirect URI this login started with, when the caller derived it; omitted for the registered URI.
    */
-  userFromCallback(params: Record<string, string>): Promise<OidcUserInfo>
+  userFromCallback(params: Record<string, string>, redirectUri?: string): Promise<OidcUserInfo>
 }

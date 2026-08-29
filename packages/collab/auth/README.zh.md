@@ -17,6 +17,7 @@ declare const params: Record<string, string>
 declare const sessionToken: string
 
 await ctx.collabAuth.loginUrl('/workspaces')            // provider authorization URL
+await ctx.collabAuth.loginUrl('/workspaces', 'https://collab.example.com') // with a request origin for an unpinned redirect
 const outcome: LoginOutcome = await ctx.collabAuth.completeLogin(params) // { location, sessionToken, principal }
 ctx.collabAuth.resolve(sessionToken)                    // CollabPrincipal | undefined (needs cookie)
 ctx.collabAuth.cookieValue(sessionToken)                // the Set-Cookie value to emit
@@ -30,13 +31,15 @@ ctx.collabAuth.clearCookieValue()                       // the Set-Cookie value 
 | --- | --- | --- |
 | `clientId` | `''` | Google OAuth 2.0 client id (required for sign-in) |
 | `clientSecret` | `''` | Google OAuth 2.0 client secret (required for sign-in) |
-| `redirectUri` | `<baseUrl>/api/collab/auth/callback` | registered redirect URI, must match the Google console |
-| `baseUrl` | `http://localhost:3080` | public base URL used to derive the redirect URI |
+| `redirectUri` | 设置了 `baseUrl` 时为 `<baseUrl>/api/collab/auth/callback`，否则为 `''` | 固定的注册 redirect URI，必须与 Google 控制台一致 |
+| `baseUrl` | `''`（由请求推导） | 在 `redirectUri` 未设置时用于推导 redirect URI 的公共基础 URL |
 | `secret` | dev-only derivation from `dshHome` | HMAC key signing session cookies; set explicitly in production |
 | `sessionTtlSeconds` | `2592000` (30 days) | session cookie lifetime |
 | `secureCookies` | `false` | mark cookies `Secure` (set behind TLS termination) |
 | `scopes` | `['openid', 'profile', 'email']` | granted Google scopes |
 | `stateTtlMs` | `600000` (10 minutes) | authorization challenge lifetime |
+
+`redirectUri`（或其推导来源 `baseUrl`）固定 redirect 的来源；当两者都省略时，每次登录都从该次登录请求的来源推导（`Host` authority 加上第一条 `x-forwarded-proto`，否则为 `http`），因此无回环的远程部署无需任何来源配置。推导出的 URI 随授权挑战保存并在回调时校验，显式的 `redirectUri` 始终优先于请求。请在 Google 控制台注册公共来源的 `/api/collab/auth/callback`；并且当服务器以非回环名称访问时，让 `/api` 信任围栏通过 `--trusted-host` 信任该来源（按 IP 字面量访问会自动推导）。harness webserver 自身不终止 TLS；终止代理的 `x-forwarded-proto` 提供 `https` 协议，TLS 之后应随之设置 `secureCookies: true`。
 
 `secret` 默认值是从 harness 主目录派生的仅限开发的确定性值，使本地 checkout 无需任何配置即可运行。它相当于口令；真实 IdP 之后的部署必须显式设置 `secret`（以及 `secureCookies`）。
 

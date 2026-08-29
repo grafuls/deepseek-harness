@@ -116,7 +116,7 @@ async function handleAuthLogin(ctx: Context, req: IncomingMessage, res: ServerRe
   }
   const redirectTo = new URL(req.url ?? '/', 'http://x').searchParams.get('redirectTo') ?? '/'
   try {
-    const url = await ctx.collabAuth.loginUrl(redirectTo)
+    const url = await ctx.collabAuth.loginUrl(redirectTo, requestOrigin(req))
     res.writeHead(302, { Location: url })
     res.end()
   } catch (error) {
@@ -124,6 +124,24 @@ async function handleAuthLogin(ctx: Context, req: IncomingMessage, res: ServerRe
     res.writeHead(302, { Location: '/?collab=signin-failed' })
     res.end()
   }
+}
+
+/**
+ * The request's public origin (`scheme://authority`), or undefined when no
+ * `Host` header is present. The scheme honors the first `x-forwarded-proto`
+ * entry (from a TLS-terminating proxy — the harness webserver itself does not
+ * terminate TLS), otherwise plain HTTP.
+ * @param req - the incoming browser request.
+ * @returns `${scheme}://${Host}`, or undefined without a Host authority.
+ */
+function requestOrigin(req: IncomingMessage): string | undefined {
+  const authority = typeof req.headers.host === 'string' ? req.headers.host.trim() : ''
+  if (authority === '') return undefined
+  const proto = typeof req.headers['x-forwarded-proto'] === 'string' ? req.headers['x-forwarded-proto'] : ''
+  const comma = proto.indexOf(',')
+  const first = proto === '' ? '' : (comma === -1 ? proto : proto.slice(0, comma)).trim()
+  const scheme = first === '' ? 'http' : first
+  return `${scheme}://${authority}`
 }
 
 /** The pathname portion of the auth service's redirect URI. */

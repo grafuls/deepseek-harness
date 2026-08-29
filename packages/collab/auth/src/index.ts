@@ -25,6 +25,12 @@ export const DEFAULT_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 /** How long an authorization challenge stays usable before it must be ingressed. */
 export const DEFAULT_STATE_TTL_MS = 10 * 60 * 1000
 
+/** Loopback dev origin used when a sign-in request carries no origin to derive from. */
+export const DEFAULT_PUBLIC_ORIGIN = 'http://localhost:3080'
+
+/** Path the OIDC callback is served at (appended to a public origin). */
+export const OIDC_CALLBACK_PATH = '/api/collab/auth/callback'
+
 /** Errors surfaced by the auth flow (sign-in, callback, session). */
 export class AuthError extends Error {}
 
@@ -43,7 +49,12 @@ export interface Config {
   clientSecret?: string
   /** Registered redirect URI (must match the Google console entry). */
   redirectUri?: string
-  /** Public base URL used to derive the redirect URI when omitted. */
+  /**
+   * Public base URL used to derive the redirect URI as `${baseUrl}${OIDC_CALLBACK_PATH}`.
+   * When both this and {@link Config.redirectUri} are omitted, each sign-in derives
+   * its redirect origin from the request, so a remote loopback-free deployment
+   * needs no origin configuration.
+   */
   baseUrl?: string
   /** HMAC secret signing session cookies; a dshHome-derived dev default when omitted. */
   secret?: string
@@ -70,7 +81,7 @@ export const Config: z<Config> = z.object({
   clientId: z.string().default(''),
   clientSecret: z.string().default(''),
   redirectUri: z.string().default(''),
-  baseUrl: z.string().default('http://localhost:3080'),
+  baseUrl: z.string().default(''),
   secret: z.string().default(''),
   dshHome: z.string().default(''),
   sessionTtlSeconds: z.natural().min(60).default(DEFAULT_SESSION_TTL_SECONDS),
@@ -83,7 +94,10 @@ export const Config: z<Config> = z.object({
 interface ResolvedSpec {
   clientId: string
   clientSecret: string
+  /** The pinned redirect URI, or `''` when it is derived per sign-in from the request origin. */
   redirectUri: string
+  /** Whether each sign-in issues the redirect to its own request origin. */
+  redirectDependsOnRequest: boolean
   secret: string
   sessionTtlSeconds: number
   secureCookies: boolean
@@ -99,13 +113,19 @@ interface ResolvedSpec {
  * @returns the resolved runtime spec with defaults applied.
  */
 export function resolveSpec(config: Config): ResolvedSpec {
-  const baseUrl = config.baseUrl ?? 'http://localhost:3080'
-  const rawRedirectUri = config.redirectUri ?? ''
+  const baseUrl = (config.baseUrl ?? '').trim().replace(/\/+$/, '')
+  const rawRedirectUri = (config.redirectUri ?? '').trim()
   const rawSecret = config.secret ?? ''
+  const redirectUri = rawRedirectUri !== ''
+    ? rawRedirectUri
+    : baseUrl !== ''
+      ? `${baseUrl}${OIDC_CALLBACK_PATH}`
+      : ''
   return {
     clientId: config.clientId ?? '',
     clientSecret: config.clientSecret ?? '',
-    redirectUri: rawRedirectUri.trim() !== '' ? rawRedirectUri : `${baseUrl}/api/collab/auth/callback`,
+    redirectUri,
+    redirectDependsOnRequest: redirectUri === '',
     secret: rawSecret !== '' ? rawSecret : `dev-only:${resolveDshHome(config.dshHome)}:collab-session`,
     sessionTtlSeconds: config.sessionTtlSeconds ?? DEFAULT_SESSION_TTL_SECONDS,
     secureCookies: config.secureCookies ?? false,
@@ -119,6 +139,8 @@ interface PendingChallenge {
   nonce: string
   redirectTo: string
   createdAt: number
+  /** The redirect URI this exchange started with (pinned or request-derived). */
+  redirectUri: string
 }
 
 /** Successful outcome of {@link CollabAuth.completeLogin}. */
@@ -263,15 +285,32 @@ export class CollabAuth extends Service {
       this.gateway = new GoogleOidcGateway(
         this.spec.clientId,
         this.spec.clientSecret,
-        this.spec.redirectUri,
+        this.redirectUri,
         this.spec.scopes,
       )
     }
   }
 
-  /** The registered redirect URI the callback route must be reachable at. */
+  /** The registered redirect URI, or the static loopback default when request-derived. */
   get redirectUri(): string {
-    return this.spec.redirectUri
+    return this.spec.redirectUri !== '' ? this.spec.redirectUri : `${DEFAULT_PUBLIC_ORIGIN}${OIDC_CALLBACK_PATH}`
+  }
+
+  /** Whether each sign-in issues the redirect to its own request origin instead of a fixed URI. */
+  get redirectDependsOnRequest(): boolean {
+    return this.spec.redirectDependsOnRequest
+  }
+
+  /**
+   * The redirect URI for one sign-in: the pinned URI when configured, else the
+   * request origin (or the loopback default when the request carries none).
+   * @param origin - the request's `scheme://authority`, when present.
+   * @returns the redirect URI the provider must send the authorization code to.
+   */
+  redirectUriFor(origin: string | undefined): string {
+    if (!this.spec.redirectDependsOnRequest) return this.spec.redirectUri
+    const trimmed = origin?.trim() ?? ''
+    return trimmed === '' ? this.redirectUri : `${trimmed}${OIDC_CALLBACK_PATH}`
   }
 
   /** Open the service: require the collab user registry for identity facts. */
@@ -287,14 +326,17 @@ export class CollabAuth extends Service {
    * Begin a sign-in: stash an anti-CSRF challenge and return the provider's
    * authorization URL.
    * @param redirectTo - where the browser lands after the callback (default `/`).
+   * @param origin - the request's `scheme://authority`, when present, used to
+   * derive the redirect URI when no redirect URI is configured.
    * @returns the provider authorization URL carrying `state` and `nonce`.
    */
-  async loginUrl(redirectTo: string = '/'): Promise<string> {
+  async loginUrl(redirectTo: string = '/', origin?: string): Promise<string> {
+    const redirectUri = this.redirectUriFor(origin)
     this.pruneExpiredStates()
     const state = randomUUID()
     const nonce = randomBytes(18).toString('base64url')
-    this.pending.set(state, { nonce, redirectTo, createdAt: Date.now() })
-    return this.gateway.authorizationUrl(state, nonce)
+    this.pending.set(state, { nonce, redirectTo, createdAt: Date.now(), redirectUri })
+    return this.gateway.authorizationUrl(state, nonce, redirectUri)
   }
 
   /**
@@ -313,7 +355,7 @@ export class CollabAuth extends Service {
       throw new AuthError('collab sign-in state has expired')
     }
     this.pending.delete(state)
-    const user = await this.gateway.userFromCallback({ ...params, nonce: challenge.nonce })
+    const user = await this.gateway.userFromCallback({ ...params, nonce: challenge.nonce }, challenge.redirectUri)
     if (user.email === '' || !user.emailVerified) {
       throw new AuthError(`collab sign-in refused: ${user.email === '' ? 'no email claim' : 'unverified email'}`)
     }

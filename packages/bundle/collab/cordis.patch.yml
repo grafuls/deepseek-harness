@@ -5,11 +5,13 @@
 # web profile is unchanged.
 #
 # The collab-auth row deliberately carries NO OAuth credentials: an operator
-# supplies clientId/clientSecret/secret (and baseUrl/secureCookies when the
-# deployment is not a plain loopback dev bind) in the profile's cordis.patch.yml
-# by id before users sign in. The collab data root defaults to `<dshHome>/collab`,
-# where the durable user/workspace registries and the per-workspace data
-# directories live.
+# supplies clientId/clientSecret/secret (and secureCookies behind TLS) in the
+# profile's cordis.patch.yml by id before users sign in. The OAuth redirect
+# origin is derived per sign-in from the request when neither baseUrl nor
+# redirectUri is pinned, so a remote loopback-free deployment needs no origin
+# configuration; pin baseUrl/redirectUri to override the request origin. The
+# collab data root defaults to `<dshHome>/collab`, where the durable
+# user/workspace registries and the per-workspace data directories live.
 - insert:
     - id: collab-users
       name: '@deepseek-ai/dsh-collab-users'

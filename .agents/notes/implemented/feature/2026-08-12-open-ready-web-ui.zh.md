@@ -12,7 +12,7 @@ Status: implemented
 
 Web 应用的命令提供方为普通调用解析出 `openBrowser: true`，为 `--no-open` 解析出 `false`。组合包把该值传给自己的 `web-runtime` 行；部署仍可显式替换该行的完整配置。运行时在激活期间对继承的 `SSH_CONNECTION` 与 `SSH_TTY` 采样一次，只要其中一项非空就会跳过浏览器交接，因为此时进程提供的是远端宿主机 loopback，而用户的本地转发地址由 SSH 客户端或编辑器持有。
 
-Web 运行时把 URL 打印与浏览器打开作为同一就绪点上的两个独立动作。它等待完整 Loader 配置树结算，并确认 `webServer` 仍在线，然后打印已配置的 URL 行；非 SSH 环境下还会在把规范 loopback URL 交给操作系统默认浏览器之前立即打印英文提示 `dsh web: opening the default browser; pass --no-open to disable`。SSH 启动会保留宿主机 URL 行，以便操作者识别远端端口，但进程无法推导或打开转发持有方的本地地址。部署显式绑定所有网络接口时，本机仍打开 loopback，打印出的 LAN URL 只用于告知；CLI 会拒绝 `--host 0.0.0.0`。`openBrowser` 与 `printUrl` 可以分别关闭。
+Web 运行时把 URL 打印与浏览器打开作为同一就绪点上的两个独立动作。它等待完整 Loader 配置树结算，并确认 `webServer` 仍在线，然后打印已配置的 URL 行；非 SSH 环境下还会在把规范 loopback URL 交给操作系统默认浏览器之前立即打印英文提示 `dsh web: opening the default browser; pass --no-open to disable`。SSH 启动会保留宿主机 URL 行，以便操作者识别远端端口，但进程无法推导或打开转发持有方的本地地址。通过 `--host 0.0.0.0` 显式绑定所有网络接口时，本机仍打开 loopback，打印出的 LAN URL 只用于告知。`openBrowser` 与 `printUrl` 可以分别关闭。
 
 交接使用维护中的 `open` 包处理 macOS、Windows、Linux、容器和 WSL。一个短生命周期 Node helper 使用规范的脱敏子进程环境调用该包，因此 Harness 凭据和 `DSH_*` 状态不会进入操作系统启动器或新启动的浏览器。`BROWSER` 是只能来自启动环境的命令选择器：应用启动过程会拒绝被发现的 `.env` 中的该变量，只有继承值才能抵达会读取该变量的兼容 opener 路径。在 Windows 上，helper 会等待短生命周期 PowerShell launcher 退出，因为 `open` 会在该进程 spawn 时、尚未把 URL 交给 shell 之前返回；其他平台则在 opener 接受 spawn 后结束。运行时绝不等待浏览器退出。父进程会读取 helper stderr，因此失败时只向 stderr 写入一条包含具体原因和手动访问 URL 的英文诊断，不会 dispose 已就绪的服务器；浏览器之后退出不属于本次交接结果。
 

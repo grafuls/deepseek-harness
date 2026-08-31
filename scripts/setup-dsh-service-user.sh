@@ -160,6 +160,11 @@ RestartSec=3
 # Hardening. ProtectHome stays 'read-only' (not 'true'/inaccessible) so the
 # service can still read the checkout under /home; all runtime data lives in
 # \$DSH_HOME (/var/lib/$RUN_USER), which stays writable.
+# AF_NETLINK/AF_PACKET stay allowed so os.networkInterfaces() works: with
+# --host 0.0.0.0 the web-app bundle enumerates interfaces (netlink/packet
+# sockets) to derive the LAN /api trust fence; blocking them crashes the
+# runtime on start (uv_interface_addresses EAFNOSUPPORT). Neither family can
+# carry outbound TCP/UDP.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
@@ -168,7 +173,7 @@ ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 PrivateDevices=true
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
 
 [Install]
 WantedBy=multi-user.target

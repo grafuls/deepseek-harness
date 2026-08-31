@@ -76,6 +76,7 @@ function fakeResponse(): { response: ServerResponse; state: { status?: number; b
 }
 
 async function mounted(config?: { trustedHosts?: string[] }): Promise<{
+  ctx: Context
   routes: WebRoute[]
   upgrades: WebUpgradeRoute[]
   dispose: () => Promise<void>
@@ -87,7 +88,7 @@ async function mounted(config?: { trustedHosts?: string[] }): Promise<{
   ctx.provide('apiProxy', {} as unknown as ApiProxy)
   const fiber = ctx.plugin({ inject: [...inject], apply }, config)
   await fiber.await()
-  return { routes, upgrades, dispose: () => fiber.dispose() }
+  return { ctx, routes, upgrades, dispose: () => fiber.dispose() }
 }
 
 describe('connection node half', () => {
@@ -195,6 +196,31 @@ describe('connection node half', () => {
     const read = fakeResponse()
     await routes[0]!.handler(fakeRequest({ host: 'harness.example' }), read.response)
     expect(read.state.status).not.toBe(403)
+    await dispose()
+  })
+
+  it('admits privileged methods for a verified principal on a declared authority', async () => {
+    const { ctx, routes, dispose } = await mounted({ trustedHosts: ['harness.example'] })
+    // A registered authenticator turning a principal on every request is the
+    // collab overlay in miniature: the loopback pin falls away for it, and the
+    // configuration plane opens up on the same authority.
+    ctx.connection.registerAuthenticator(ctx, () => ({ userId: 'u1' }))
+    for (const method of [
+      'host.pickDirectory', 'host.openPath',
+      'settings.describe', 'settings.openDocument', 'settings.update', 'settings.replace', 'settings.mutate',
+      'credentials.describe', 'credentials.set', 'credentials.unset',
+      'llm.discoverModels',
+      'agentPreset.read', 'agentPreset.copy', 'agentPreset.openDocument', 'agentPreset.remove',
+    ]) {
+      const allowed = fakeResponse()
+      await routes[0]!.handler(
+        fakeRequest({ host: 'harness.example' }, `${API_PATH}/${method}`),
+        allowed.response,
+      )
+      // 404 is the empty proxy's carrier answer: the trust fence and the
+      // loopback pin both admitted the authenticated request to the bridge.
+      expect(allowed.state.status).toBe(404)
+    }
     await dispose()
   })
 
@@ -553,6 +579,29 @@ describe('connection node half over a real HTTP server', () => {
       }
       // Loopback reaches everything, configuration included.
       expect(await call(port, 'settings.describe', `127.0.0.1:${String(port)}`)).toBe(404)
+    } finally {
+      await close()
+      await dispose()
+    }
+  })
+
+  it('admits every configuration method for a verified principal over real HTTP', async () => {
+    // The same authority that 403s an anonymous caller admits the whole
+    // privileged plane once the authenticator verifies a principal — the
+    // boundary the browser actually exercises on a trusted-host deployment.
+    const { ctx, routes, dispose } = await mounted({ trustedHosts: ['harness.example'] })
+    ctx.connection.registerAuthenticator(ctx, () => ({ userId: 'u1' }))
+    const { port, close } = await serve(routes)
+    try {
+      for (const method of [
+        'settings.describe', 'settings.openDocument', 'settings.update', 'settings.replace', 'settings.mutate',
+        'credentials.describe', 'credentials.set', 'credentials.unset',
+        'host.pickDirectory', 'host.openPath',
+        'llm.discoverModels',
+        'agentPreset.read', 'agentPreset.copy', 'agentPreset.openDocument', 'agentPreset.remove',
+      ]) {
+        expect([method, await call(port, method, 'harness.example')]).toEqual([method, 404])
+      }
     } finally {
       await close()
       await dispose()

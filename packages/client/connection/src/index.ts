@@ -73,20 +73,23 @@ export const Config: z<ConnectionConfig> = z.object({
 })
 
 /**
- * Methods gated to loopback even on a trusted-host deployment. Native dialogs
- * act on the host machine; the settings and credential domains mutate the
- * user's configuration and secret store, and READING them is equally
- * privileged — `settings.describe` returns every exposed namespace's
- * configuration and `credentials.describe` reports whether an arbitrary
- * environment-variable name is configured and where from, which is
+ * Methods gated to loopback unless a registered authenticator verifies the
+ * caller. Native dialogs act on the host machine; the settings and credential
+ * domains mutate the user's configuration and secret store, and READING them
+ * is equally privileged — `settings.describe` returns every exposed
+ * namespace's configuration and `credentials.describe` reports whether an
+ * arbitrary environment-variable name is configured and where from, which is
  * reconnaissance no anonymous caller should have. `trustedHosts` is a
- * DNS-rebinding fence, explicitly not authentication, so the whole
- * configuration plane stays loopback-same-origin until a real authentication
- * layer exists. `llm.discoverModels` belongs to that plane on both counts: it
- * carries a draft credential, and it makes the HOST issue a GET to a URL the
- * caller chose and reports back the status or the parsed body — an anonymous
- * LAN caller would have a probe for whatever the host can reach and the
- * browser cannot.
+ * DNS-rebinding fence, explicitly not authentication, so on a deployment with
+ * no authenticator the whole configuration plane stays loopback-same-origin.
+ * Once a deployment registers an authenticator (the collab overlay is one), a
+ * request it verifies — one whose principal is present — may use these
+ * methods from any authority the outer fence already admitted; the pin
+ * survives only for unauthenticated callers. `llm.discoverModels` belongs to
+ * that plane on both counts: it carries a draft credential, and it makes the
+ * HOST issue a GET to a URL the caller chose and reports back the status or
+ * the parsed body — a caller without a principal would have a probe for
+ * whatever the host can reach and the browser cannot.
  *
  * The model catalog (`llm.providers`, `llm.models`) is deliberately NOT here:
  * it carries provider ids, display names, and model lists — no endpoints,
@@ -150,7 +153,11 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
         : undefined
       if (method !== undefined
         && PRIVILEGED_METHODS.has(method)
-        && !isTrustedApiRequest(request, [])) {
+        && !isTrustedApiRequest(request, [])
+        // A verified principal (e.g. from the collab overlay) may use the
+        // configuration plane from a trusted authority; without one, the empty
+        // trust list keeps it pinned to loopback.
+        && connection.principal() === undefined) {
         return new Response('forbidden', { status: 403 })
       }
       if (request.method === 'GET' && (pathname === MUX_EVENTS_PATH || pathname === HOST_EVENTS_PATH)) {

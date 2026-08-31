@@ -14,6 +14,10 @@ A verified request principal may use the privileged method set from any authorit
 - With an authenticator registered (collab overlay), any request it verified passes; anonymous callers are still refused — on collab they are already answered 401 by the auth gate before the pin, and the pin remains as a second layer for any deployment without a gate.
 - The model catalog (`llm.providers`, `llm.models`) stays public exactly as before; `agentPreset.list`/`select` stay out of the privileged set.
 
+### Client half (the browser lockout)
+
+The pin was only the server side of the old stance. The settings browser domain mirrored it with a client-side gate: `dsh-client-ui-settings` derived every settings scope's persistence from `connection.isLoopback` and used a `'memory'` mode — never touching the wire — off the loopback origin, so even after the server admitted a principal a remote collab session still saw "settings are unavailable in this browser". The same decision removes that pre-lock: `ui-settings`' mirror and `bind()` are host-backed on every origin ([`packages/client/ui-settings/src/client/index.ts`](../../../../packages/client/ui-settings/src/client/index.ts), [`settings-scope.ts`](../../../../packages/client/ui-settings/src/client/settings-scope.ts)) — the browser asks, and the server's authenticator gate and the privileged pin answer per request. The `'memory'` persistence option remains in the mirror/scope engine only as an explicit offline choice for tests; the welcome-notice process-local fallback (`welcome-store.ts`) was removed. The loopback-only native "Open configuration file" action is untouched: it drives the host desktop and stays a loopback feature.
+
 ## Alternatives considered
 
 ### Keep the loopback pin and drive configuration out of band

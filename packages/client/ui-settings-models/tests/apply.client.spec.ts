@@ -153,8 +153,30 @@ describe('ui-settings-models apply', () => {
     expect(() => b.locale.register('settings.models', 'en', {})).not.toThrow()
   })
 
-  it('keeps remote-browser acknowledgement in process memory', async () => {
-    const b = await bench(false)
+  it('acknowledges through the Host document even on a remote browser', async () => {
+    // Remote browsers are host-backed too: the scope reads the shared mirror
+    // and the wire answers, so the acknowledgement travels like any setting.
+    const settings = {
+      describe: vi.fn(() => Promise.resolve({
+        rpcId: 'apply-welcome-remote' as never,
+        result: {
+          ok: true as const,
+          value: {
+            writable: true,
+            hasDocument: false,
+            namespaces: [{
+              ns: WELCOME_NOTICE_SETTINGS_NAMESPACE,
+              schema: {},
+              value: {},
+              applies: 'live' as const,
+              secrets: [],
+              revision: 0,
+            }],
+          },
+        },
+      })),
+    }
+    const b = await bench(false, settings)
     declare(b.slots)
     await b.ctx.plugin({ inject: [...inject], apply }).await()
     const entry = b.slots.entries('settings.onboarding')
@@ -164,8 +186,10 @@ describe('ui-settings-models apply', () => {
     )()
 
     await injected.controller.load()
-    expect(injected.controller.store.getSnapshot()).toEqual({
-      status: 'ready', acknowledged: false, error: null,
+    await vi.waitFor(() => {
+      expect(injected.controller.store.getSnapshot()).toEqual({
+        status: 'ready', acknowledged: false, error: null,
+      })
     })
   })
 })

@@ -61,7 +61,10 @@ export class SettingsScopeController<T> implements SettingsScope<T> {
    * @param api - settings wire face (writes only; reads ride the mirror).
    * @param spec - namespace identity and optional narrowing decoder.
    * @param mirror - the shared describe mirror this scope derives from.
-   * @param persistence - remote browsers remain process-local because settings RPCs are loopback-only.
+   * @param persistence - 'host' reads and writes the Host document; 'memory'
+   * keeps the scope offline (an explicit choice — the server's authenticator
+   * gate and privileged pin now answer every settings request, so no caller
+   * selects 'memory').
    * @param schema - settings-owned schema operations.
    */
   constructor(
@@ -275,11 +278,14 @@ export class SettingsScopeBinder extends Service {
   bind<T>(spec: SettingsScopeSpec<T>): SettingsScope<T> {
     const ctx = this.ctx
     const connection = ctx.get('connection') as ConnectionHandle
+    // Host-backed on every origin: the server's authenticator gate and the
+    // privileged-method pin answer per request, so a remote session the wire
+    // honors configures through the same document as a loopback one.
     const controller = new SettingsScopeController<T>(
       connection.api,
       spec,
       this.mirror,
-      connection.isLoopback ? 'host' : 'memory',
+      'host',
       this.schema,
     )
     ctx.effect(() => {

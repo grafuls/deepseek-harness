@@ -174,7 +174,10 @@ describe('ui-settings-general apply', () => {
     const fiber = b.ctx.plugin({ inject: [...inject], apply })
     await fiber.await()
     expect(b.slots.entries('settings.action')).toEqual([])
-    expect(b.settingsDescribe).not.toHaveBeenCalled()
+    // The action is loopback-only, but the shared mirror is host-backed on
+    // every connection: the wire answers the describe, and the action stays
+    // withheld regardless of that answer.
+    expect(b.settingsDescribe).toHaveBeenCalledTimes(1)
     await fiber.dispose()
     for (const [name] of SEATS) expect(b.slots.entries(name)).toEqual([])
   })

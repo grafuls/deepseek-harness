@@ -49,10 +49,11 @@ export const inject = ['connection', 'remote']
 export function apply(ctx: ClientContext): void {
   const schema = new SettingsSchemaService(ctx)
   const connection = ctx.get('connection') as ConnectionHandle
-  const mirror = new SettingsDescribeMirror(
-    connection.api,
-    connection.isLoopback ? 'host' : 'memory',
-  )
+  // Host-backed on every connection: the server answers each settings request
+  // itself (the optional authenticator's gate and the privileged-method pin),
+  // so a session the wire honors can configure from any trusted authority and
+  // a session it refuses gets the wire's own refusal, not a page-origin guess.
+  const mirror = new SettingsDescribeMirror(connection.api, 'host')
   ctx.effect(() => {
     const disposers = [
       (ctx.get('remote') as ClientContext['remote']).$on('settings/document-updated', () => { void mirror.load() }),

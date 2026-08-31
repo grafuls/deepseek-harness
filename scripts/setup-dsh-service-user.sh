@@ -2,11 +2,22 @@
 # scripts/setup-dsh-service-user.sh
 #
 # Create a dedicated, unprivileged Linux user that runs the DeepSeek Harness
-# web GUI ("dsh web") from this repository's existing prebuilt checkout.
+# web GUI from this repository's existing prebuilt checkout, matching the
+# invocation:
+#
+#   pnpm dsh --profile web-collab --host 0.0.0.0 --trusted-host "$(hostname)" --no-open
+#
+# The unit runs the built-CLI equivalent of that line (the production runner,
+# per apps/cli/reference/README.md), because pnpm itself lives under the
+# owner's 0700 home directory and is not reachable by the service user:
+#
+#   node apps/cli/lib/bin.js --profile web-collab --host 0.0.0.0 \
+#       --trusted-host <hostname> --no-open
 #
 # What the runner gets:
 #   * a locked system account (no login shell, no password);
-#   * a private writable data dir  /var/lib/<user>/.dsh  (the $DSH_HOME);
+#   * a private writable data dir  /var/lib/<user>/.dsh  (the $DSH_HOME; the
+#     collab bundle keeps its registries under <dshHome>/collab);
 #   * read access to the prebuilt checkout (grants traverse into the checkout's
 #     parent chain, e.g. /home/grafuls, which is normally mode 700);
 #   * a systemd unit  /etc/systemd/system/dsh-web.service  that starts it.
@@ -17,7 +28,8 @@
 #   --no-start   install everything but do not enable/start the service.
 #
 # Tune with environment variables:
-#   DSH_RUN_USER=dshsvc  DSH_WEB_HOST=127.0.0.1  DSH_WEB_PORT=3081
+#   DSH_RUN_USER=dshsvc  DSH_WEB_PROFILE=web-collab  DSH_WEB_HOST=0.0.0.0
+#   DSH_TRUSTED_HOST=<name>   DSH_WEB_PORT=<port only if you override the default>
 #
 set -euo pipefail
 
@@ -27,8 +39,10 @@ RUN_GROUP="$RUN_USER"
 RUN_HOME="/var/lib/$RUN_USER"
 DSH_HOME="${DSH_HOME:-$RUN_HOME/.dsh}"
 CHECKOUT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WEB_HOST="${DSH_WEB_HOST:-0.0.0.0}"      # keep loopback: the web carrier has NO auth layer
-WEB_PORT="${DSH_WEB_PORT:-3080}"           # default 3080 is usually taken by the dev GUI
+WEB_PROFILE="${DSH_WEB_PROFILE:-web-collab}"
+WEB_HOST="${DSH_WEB_HOST:-0.0.0.0}"               # all interfaces — matches `--host 0.0.0.0`
+TRUSTED_HOST="${DSH_TRUSTED_HOST:-$(hostname)}"   # matches `--trusted-host $(hostname)`
+WEB_PORT_OVERRIDE="${DSH_WEB_PORT:-}"             # empty => omit --port (web-app default: 3080)
 SERVICE_NAME="dsh-web.service"
 UNIT="/etc/systemd/system/$SERVICE_NAME"
 NODE_BIN="$(command -v node || echo /usr/bin/node)"
@@ -36,6 +50,11 @@ WITH_START=1
 for arg in "$@"; do
   [ "$arg" = "--no-start" ] && WITH_START=0
 done
+
+WEB_ARGS=(--profile "$WEB_PROFILE" --host "$WEB_HOST" --trusted-host "$TRUSTED_HOST" --no-open)
+if [ -n "$WEB_PORT_OVERRIDE" ]; then
+  WEB_ARGS+=(--port "$WEB_PORT_OVERRIDE")
+fi
 
 say()  { printf '\n== %s ==\n' "$*"; }
 
@@ -52,10 +71,18 @@ say "Preflight"
   echo "error: built CLI not found — run 'pnpm run build' first (apps/cli/lib/bin.js)" >&2; exit 1; }
 [ -d "$CHECKOUT/apps/web/dist" ] || {
   echo "error: built web assets missing — run 'pnpm run build' first (apps/web/dist)" >&2; exit 1; }
-printf '  runner user : %s\n  data dir    : %s\n  checkout    : %s\n  binds       : %s:%s\n' \
-  "$RUN_USER" "$DSH_HOME" "$CHECKOUT" "$WEB_HOST" "$WEB_PORT"
+[ -f "$CHECKOUT/packages/bundle/collab/lib/index.js" ] || {
+  echo "error: built collab bundle missing — run 'pnpm run build' first (packages/bundle/collab/lib)" >&2; exit 1; }
+printf '  runner user : %s\n  data dir    : %s\n  checkout    : %s\n  profile     : %s\n  binds       : %s%s\n  trusted-host: %s\n' \
+  "$RUN_USER" "$DSH_HOME" "$CHECKOUT" "$WEB_PROFILE" "$WEB_HOST" \
+  "${WEB_PORT_OVERRIDE:+:$WEB_PORT_OVERRIDE}" "$TRUSTED_HOST"
 command -v setfacl >/dev/null 2>&1 || echo "  note: acl is not installed; will need manual chmod (below)"
 command -v runuser >/dev/null 2>&1 || echo "  note: runuser not installed (util-linux); traverse check skipped"
+
+if [ -z "$WEB_PORT_OVERRIDE" ] && ss -ltn 2>/dev/null | grep -q ":3080 "; then
+  echo "  warning: port 3080 is already in use; the collab profile defaults to it."
+  echo "           stop that instance first, or run with DSH_WEB_PORT=<other>."
+fi
 
 # ------------------------------------------------------------ account
 say "Creating system account $RUN_USER"
@@ -77,7 +104,7 @@ ENV_TEMPLATE="$DSH_HOME/.env"
 if [ ! -f "$ENV_TEMPLATE" ]; then
   cat > "$ENV_TEMPLATE" <<EOF
 # DeepSeek Harness runner credentials for $RUN_USER ($DSH_HOME).
-# Uncomment and fill in so the web app can run agents:
+# Uncomment and fill in so agents can call the DeepSeek API:
 #DEEPSEEK_API_KEY=sk-...
 EOF
   chown "$RUN_USER:$RUN_GROUP" "$ENV_TEMPLATE"
@@ -116,7 +143,7 @@ done
 say "Installing systemd unit $UNIT"
 cat > "$UNIT" <<EOF
 [Unit]
-Description=DeepSeek Harness web GUI ($RUN_USER)
+Description=DeepSeek Harness web GUI ($WEB_PROFILE, $RUN_USER)
 After=network.target
 
 [Service]
@@ -126,7 +153,7 @@ Group=$RUN_GROUP
 WorkingDirectory=$CHECKOUT
 Environment=HOME=$RUN_HOME
 Environment=DSH_HOME=$DSH_HOME
-ExecStart=$NODE_BIN $CHECKOUT/apps/cli/lib/bin.js web --no-open --host $WEB_HOST --port $WEB_PORT
+ExecStart=$NODE_BIN $CHECKOUT/apps/cli/lib/bin.js ${WEB_ARGS[*]}
 Restart=on-failure
 RestartSec=3
 
@@ -150,7 +177,11 @@ systemctl daemon-reload
 
 if [ "$WITH_START" = 1 ]; then
   say "Enabling and starting $SERVICE_NAME"
-  systemctl enable --now "$SERVICE_NAME"
+  systemctl enable "$SERVICE_NAME"
+  systemctl start "$SERVICE_NAME" || {
+    echo "  warning: start failed — check 'journalctl -u $SERVICE_NAME -e'" >&2
+    echo "           (most likely the port is already taken, or an SELinux denial)." >&2
+  }
 else
   echo "  installed but not started (--no-start); start later with: systemctl start $SERVICE_NAME"
 fi
@@ -159,30 +190,38 @@ fi
 say "Done"
 cat <<EOF
 
-Account   : $RUN_USER (system account, no login: /usr/sbin/nologin)
-Data      : $DSH_HOME                      (owned by $RUN_USER)
-URL       : http://$WEB_HOST:$WEB_PORT
-Service   : $SERVICE_NAME
+Account    : $RUN_USER (system account, no login: /usr/sbin/nologin)
+Data       : $DSH_HOME                         (owned by $RUN_USER)
+Service    : $SERVICE_NAME
+Launches   : node apps/cli/lib/bin.js ${WEB_ARGS[*]}
+            (equals: pnpm dsh ${WEB_ARGS[*]})
 
 Try it manually first (foreground, logs on your terminal):
   runuser -u $RUN_USER -- env HOME=$RUN_HOME DSH_HOME=$DSH_HOME \\
-    $NODE_BIN $CHECKOUT/apps/cli/lib/bin.js web --no-open --host $WEB_HOST --port $WEB_PORT
+    $NODE_BIN $CHECKOUT/apps/cli/lib/bin.js ${WEB_ARGS[*]}
 
 Then watch the service:
   systemctl status $SERVICE_NAME
   journalctl -u $SERVICE_NAME -f
 
-Credentials: so the web app can run agents, put your key in $DSH_HOME/.env
+API key: so agents can call the DeepSeek API, put your key in $DSH_HOME/.env
   DEEPSEEK_API_KEY=sk-...
 (or use: sudo -u $RUN_USER ... dsh credentials set <name>). Never leave a
 plaintext key in a world-readable file.
 
+Collab (web-collab) operator config: before users can sign in, add the OAuth
+credentials to the profile's user-layer patch by id:
+  $DSH_HOME/profiles/web-collab/cordis.patch.yml
+    - update: { id: collab-auth, config: { clientId: ..., clientSecret: ..., secret: ... } }
+Behind plain HTTP, also set secureCookies: false; over a public network put it
+behind TLS (it derives the OAuth redirect origin from each request).
+
 Security notes:
-  * The web carrier ships NO authentication layer. Keep --host $WEB_HOST on
-    loopback unless the network is fully trusted. The URL above is loopback.
-  * A separate GUI instance is already on 0.0.0.0:3080 (LAN-visible, no auth);
-    this runner defaults to port $WEB_PORT to avoid the conflict. If you mean
-    for this runner to replace it, stop that process and set DSH_WEB_PORT=3080.
+  * The web carrier ships NO authentication layer. --host $WEB_HOST serves all
+    interfaces; the '--trusted-host $TRUSTED_HOST' flag only widens the /api
+    browser-trust fence to that authority. Expose on a trusted network only.
+  * This machine already runs a GUI on 0.0.0.0:3080; the collab profile also
+    defaults to port 3080. Stop the other instance or set DSH_WEB_PORT=<other>.
   * Granting traverse (execute-only) on the checkout's parent chain does not
     list or modify anything; it only lets the runner descend the path.
 

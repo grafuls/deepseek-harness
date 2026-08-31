@@ -153,6 +153,7 @@ Group=$RUN_GROUP
 WorkingDirectory=$CHECKOUT
 Environment=HOME=$RUN_HOME
 Environment=DSH_HOME=$DSH_HOME
+Environment=NODE_EXTRA_CA_CERTS=/etc/pki/tls/certs/ca-bundle.crt
 ExecStart=$NODE_BIN $CHECKOUT/apps/cli/lib/bin.js ${WEB_ARGS[*]}
 Restart=on-failure
 RestartSec=3

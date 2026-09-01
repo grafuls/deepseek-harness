@@ -111,6 +111,9 @@ export function apply(ctx: ClientContext): void {
         void controller.reorderSession(hostWorkspaceId, sessionId, beforeSessionId)
       },
       delete: (workspaceId) => { void controller.delete(workspaceId) },
+      renameWorkspace: async (workspaceId, name) => {
+        await controller.renameWorkspace(workspaceId, name)
+      },
       setGroupBy: (mode) => { controller.setGroupBy(mode) },
       setOrderBy: (mode) => { controller.setOrderBy(mode) },
       create: (name, repoUrl) => controller.create(name, repoUrl).then(id => id !== undefined),

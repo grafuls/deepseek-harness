@@ -84,6 +84,11 @@ async function bench(extraChildren: Record<string, unknown> = {}) {
     'collab/workspace.list': [{ ok: true, value: [] }, { ok: true, value: [] }, { ok: true, value: [] }, { ok: true, value: [] }],
     'collab/workspace.myInvitations': [{ ok: true, value: [] }, { ok: true, value: [] }, { ok: true, value: [] }, { ok: true, value: [] }],
     'collab/workspace.delete': [{ ok: true, value: undefined }],
+    // Rename resolves once then refuses: the dialog keeps failures open.
+    'collab/workspace.rename': [
+      { ok: true, value: { id: 'w1', name: 'Eng' } },
+      { ok: false, error: { code: 'internal', message: 'nope', details: {} } },
+    ],
     // openWorkspace's mount: the Host list already reflects it, so the switch
     // navigates synchronously and exercises the startSession port wrapper.
     'collab/workspace.open': [{ ok: true, value: MOUNTED }],
@@ -278,7 +283,7 @@ describe('ui-collab client plugin', () => {
   })
 
   it('routes session row verbs through the runtime session and workspace faces', async () => {
-    const { ctx, slots, binding, fork, openSession, archiveSession } = await bench()
+    const { ctx, slots, binding, fork, openSession, archiveSession, seen } = await bench()
     // Rename hops the list binding to the per-session rename verb.
     const rename = vi.fn<(title: string) => Promise<RpcResult<{ title: string; seq: number }>>>(async () => ({ ok: true as const, value: { title: 'x', seq: 1 } }))
     binding.mockReturnValue({ session: { rename } })
@@ -311,6 +316,11 @@ describe('ui-collab client plugin', () => {
     await vi.waitFor(() => { expect(archiveSession).toHaveBeenCalledWith('s1') })
     archiveSession.mockRejectedValue(new Error('denied'))
     await expect(face.actions.archiveSession('s1' as SessionId)).rejects.toThrow('denied')
+    // Workspace rename routes to the collab RPC; a wire refusal propagates so
+    // the dialog stays open with the host message.
+    await face.actions.renameWorkspace('w1', 'Eng')
+    expect(seen).toContain('collab/workspace.rename')
+    await expect(face.actions.renameWorkspace('w1', 'Eng')).rejects.toThrow('nope')
     await fiber.dispose()
   })
 

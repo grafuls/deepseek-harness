@@ -40,6 +40,8 @@ export interface CollabWorkspacesActions {
   archiveSession: (sessionId: SessionId) => Promise<void>
   /** Reorder one shared session within its collab workspace's Host account (session row drag). */
   reorderSession: (hostWorkspaceId: string, sessionId: string, beforeSessionId?: string) => void
+  /** Rename a collab workspace by id (rejects on host failure so the dialog keeps its error). */
+  renameWorkspace: (workspaceId: string, name: string) => Promise<void>
   /** Delete a collab workspace from the section row's options menu. */
   delete: (workspaceId: string) => void
   /** Set the collab list grouping mode (view options). */

@@ -10,7 +10,7 @@
  * creation through the header add affordance. Props are fed directly (hooks
  * bound by the renderer in production); no render machinery here.
  */
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type {
   SessionId, SessionListState, SessionSummary, WorkspaceId, WorkspaceListState, WorkspaceView,
@@ -75,6 +75,7 @@ function actions(): CollabWorkspacesActions {
     renameSession: vi.fn(async () => { }),
     forkSession: vi.fn(),
     archiveSession: vi.fn(async () => { }),
+    renameWorkspace: vi.fn(async () => { }),
     delete: vi.fn(),
     setGroupBy: vi.fn(),
     setOrderBy: vi.fn(),
@@ -338,6 +339,93 @@ describe('CollabSection', () => {
     expect(screen.getByRole('menuitem', { name: 'Delete workspace' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Workspace actions for Alpha' }))
     expect(screen.queryByRole('menuitem', { name: 'Delete workspace' })).toBeNull()
+  })
+
+  it('opens the workspace rename dialog from the Rename menu item, seeded with the current name', () => {
+    const renameWorkspace = vi.fn(async () => { })
+    section(readyState(), { renameWorkspace })
+    fireEvent.click(screen.getByRole('button', { name: 'Workspace actions for Alpha' }))
+    expect(screen.getByRole('menuitem', { name: 'Rename' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
+    const dialog = screen.getByRole('dialog', { name: 'Rename workspace' })
+    const input = within(dialog).getByLabelText<HTMLInputElement>('Workspace name')
+    expect(input.value).toBe('Alpha')
+    expect(renameWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('renames a workspace on confirm: unchanged drafts stay blocked, enter commits', async () => {
+    const renameWorkspace = vi.fn(async () => { })
+    section(readyState(), { renameWorkspace })
+    fireEvent.click(screen.getByRole('button', { name: 'Workspace actions for Alpha' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
+    const input = screen.getByLabelText<HTMLInputElement>('Workspace name')
+    // The seeded draft equals the current name: unchanged is blocked even
+    // through the Enter accelerator, and the confirm button is disabled.
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Rename' }).disabled).toBe(true)
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(renameWorkspace).not.toHaveBeenCalled()
+    // A blank draft is blocked the same way; a non-Enter key never confirms.
+    fireEvent.change(input, { target: { value: '   ' } })
+    fireEvent.keyDown(input, { key: 'a' })
+    expect(renameWorkspace).not.toHaveBeenCalled()
+    // While an IME composition is active Enter must not commit half a word.
+    fireEvent.change(input, { target: { value: 'Eng' } })
+    fireEvent.compositionStart(input)
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(renameWorkspace).not.toHaveBeenCalled()
+    fireEvent.compositionEnd(input)
+    // A real change commits the shared rename and closes the dialog.
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => { expect(renameWorkspace).toHaveBeenCalledWith('w1', 'Eng') })
+    await waitFor(() => { expect(screen.queryByRole('dialog')).toBeNull() })
+  })
+
+  it('a rejected workspace rename keeps the dialog open with the error; typing clears it', async () => {
+    const renameWorkspace = vi.fn(async () => { throw new Error('name taken') })
+    section(readyState(), { renameWorkspace })
+    fireEvent.click(screen.getByRole('button', { name: 'Workspace actions for Alpha' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
+    const input = screen.getByLabelText('Workspace name')
+    fireEvent.change(input, { target: { value: 'Eng' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe('name taken') })
+    fireEvent.change(input, { target: { value: 'Eng 2' } })
+    expect(screen.queryByRole('alert')).toBeNull()
+    // Cancel after a failure dismisses the dialog.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('reports non-Error workspace rename failures as text', async () => {
+    const renameWorkspace = vi.fn(async () => { throw 'denied' })
+    section(readyState(), { renameWorkspace })
+    fireEvent.click(screen.getByRole('button', { name: 'Workspace actions for Alpha' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
+    fireEvent.change(screen.getByLabelText('Workspace name'), { target: { value: 'Eng' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe('denied') })
+  })
+
+  it('while renaming a workspace the dialog locks: input disabled, close blocked, Enter ignored', async () => {
+    let resolveRename!: () => void
+    const renameWorkspace = vi.fn(() => new Promise<void>((resolve) => { resolveRename = resolve }))
+    section(readyState(), { renameWorkspace })
+    fireEvent.click(screen.getByRole('button', { name: 'Workspace actions for Alpha' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
+    const input = screen.getByLabelText<HTMLInputElement>('Workspace name')
+    fireEvent.change(input, { target: { value: 'Eng' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    expect(renameWorkspace).toHaveBeenCalledWith('w1', 'Eng')
+    expect(input.disabled).toBe(true)
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Cancel' }).disabled).toBe(true)
+    // A second submit through the Enter accelerator is ignored while in flight.
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(renameWorkspace).toHaveBeenCalledTimes(1)
+    // Escape (mask/close) cannot dismiss the dialog while the rename runs.
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    await act(async () => { resolveRename() })
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 
   it('labels a blank collab session with the localized New Session row title', () => {

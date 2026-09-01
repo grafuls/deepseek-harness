@@ -630,6 +630,37 @@ export class CollabWorkspaces extends Service {
   }
 
   /**
+   * Rename a workspace (admin). The new name is persisted and published, so
+   * the re-labeled name reaches every member through the workspace list. An
+   * unchanged name is a no-op that keeps the record's `updatedAt` stable.
+   * @param actorWorkspaceRole - the acting workspace role (needs `workspace.rename`).
+   * @param actorId - the acting user.
+   * @param workspaceId - the workspace.
+   * @param name - the new display name (trimmed; must not be empty).
+   * @returns the updated workspace record.
+   */
+  async renameWorkspace(actorWorkspaceRole: WorkspaceRole, actorId: UserId, workspaceId: WorkspaceId, name: string): Promise<WorkspaceRecord> {
+    authorizeWorkspace(actorWorkspaceRole, 'workspace.rename')
+    return this.enqueue(async () => {
+      const record = this.requireWorkspace(workspaceId)
+      if (this.memberOf(workspaceId, actorId) === undefined) {
+        throw new Error(`collab authorization denied: not a member of workspace '${workspaceId}'`)
+      }
+      const trimmed = name.trim()
+      if (trimmed === '') throw new Error('collab workspace name must not be empty')
+      if (trimmed === record.name) return record
+      const next: WorkspaceRecord = { ...record, name: trimmed, updatedAt: now() }
+      await this.persist(
+        [...this.workspaces.values()].map(entry => entry.id === workspaceId ? next : entry),
+        [...this.invitations.values()],
+      )
+      this.workspaces.set(workspaceId, next)
+      this.publish()
+      return next
+    })
+  }
+
+  /**
    * Delete a workspace and every invitation into it.
    * @param actorWorkspaceRole - the acting workspace role (needs `workspace.delete`).
    * @param workspaceId - the workspace.

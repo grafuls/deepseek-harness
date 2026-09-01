@@ -469,3 +469,39 @@ describe('repo-bootstrap clone lifecycle', () => {
     expect(await ctx.collabWorkspaces.settleClone(ws.id, { kind: 'cloned', clonePath: '/clones/b' })).toBe('absent')
   })
 })
+
+describe('rename', () => {
+  it('renames a workspace for an admin and preserves every other record', async () => {
+    const { ctx } = await harness()
+    const alice = await user(ctx, 'sub-alice', 'alice@example.com', 'Alice')
+    const untouched = await ctx.collabWorkspaces.create(alice.globalRole, alice.id, 'Docs')
+    const ws = await ctx.collabWorkspaces.create(alice.globalRole, alice.id, 'Platform')
+    const renamed = await ctx.collabWorkspaces.renameWorkspace('admin', alice.id, ws.id, '  Data Platform  ')
+    expect(renamed.name).toBe('Data Platform')
+    expect(renamed.id).toBe(ws.id)
+    expect(ctx.collabWorkspaces.findById(ws.id)!.name).toBe('Data Platform')
+    expect(ctx.collabWorkspaces.findById(untouched.id)!.name).toBe('Docs')
+    expect(ctx.collabWorkspaces.listFor(alice.id).find(entry => entry.id === ws.id)!.name).toBe('Data Platform')
+  })
+
+  it('leaves the record untouched when the name is unchanged', async () => {
+    const { ctx } = await harness()
+    const alice = await user(ctx, 'sub-alice', 'alice@example.com', 'Alice')
+    const ws = await ctx.collabWorkspaces.create(alice.globalRole, alice.id, 'Platform')
+    const same = await ctx.collabWorkspaces.renameWorkspace('admin', alice.id, ws.id, ' Platform ')
+    expect(same).toBe(ws)
+    expect(ctx.collabWorkspaces.findById(ws.id)!.name).toBe('Platform')
+  })
+
+  it('refuses a blank name, a developer role, a non-member, and an unknown id', async () => {
+    const { ctx } = await harness()
+    const alice = await user(ctx, 'sub-alice', 'alice@example.com', 'Alice')
+    const bob = await user(ctx, 'sub-bob', 'bob@example.com', 'Bob')
+    const ws = await ctx.collabWorkspaces.create(alice.globalRole, alice.id, 'Platform')
+    await expect(ctx.collabWorkspaces.renameWorkspace('admin', alice.id, ws.id, '   ')).rejects.toThrow(/must not be empty/)
+    await expect(ctx.collabWorkspaces.renameWorkspace('developer', alice.id, ws.id, 'Eng')).rejects.toBeInstanceOf(CollabForbiddenError)
+    // A user who is not a member cannot rename, even with the admin role slot.
+    await expect(ctx.collabWorkspaces.renameWorkspace('admin', bob.id, ws.id, 'Eng')).rejects.toThrow(/not a member/)
+    await expect(ctx.collabWorkspaces.renameWorkspace('admin', alice.id, WorkspaceId('nope'), 'Eng')).rejects.toThrow(/does not exist/)
+  })
+})

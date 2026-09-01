@@ -42,6 +42,7 @@ export const WORKSPACE_ROLE_PERMISSIONS: Readonly<Record<WorkspaceRole, readonly
     'workspace.manage',
     'workspace.members.manage',
     'workspace.members.read',
+    'workspace.rename',
     'workspace.use',
   ],
   developer: ['workspace.members.read', 'workspace.use'],

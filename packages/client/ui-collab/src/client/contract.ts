@@ -326,4 +326,15 @@ export class CollabApi {
   async deleteWorkspace(workspaceId: string): Promise<void> {
     await this.request('collab/workspace.delete', { workspaceId })
   }
+
+  /**
+   * Rename a workspace (admin only); the shared name change applies for every
+   * member once the host record updates.
+   * @param workspaceId - the workspace to rename.
+   * @param name - the new display name (trimmed server-side).
+   * @returns the renamed workspace view.
+   */
+  renameWorkspace(workspaceId: string, name: string): Promise<CollabWorkspaceView> {
+    return this.request('collab/workspace.rename', { workspaceId, name })
+  }
 }

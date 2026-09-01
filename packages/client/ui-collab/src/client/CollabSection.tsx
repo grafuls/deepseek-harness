@@ -433,7 +433,7 @@ function CollabSessionRow({ summary, current, now, onOpen, drag, flat = false, o
  * Session button). The row toggles its nested sessions; the action buttons
  * stop propagation so a click on them never toggles the fold.
  */
-function CollabWorkspaceRow({ workspace, expanded, active, path, menuOpen, onToggle, onMenuChange, onSelectMenu, onNewSession, t }: {
+function CollabWorkspaceRow({ workspace, expanded, active, path, menuOpen, onToggle, onMenuChange, onSelectMenu, onRename, onNewSession, t }: {
   workspace: CollabWorkspaceView
   expanded: boolean
   active: boolean
@@ -442,10 +442,13 @@ function CollabWorkspaceRow({ workspace, expanded, active, path, menuOpen, onTog
   onToggle: () => void
   onMenuChange: (open: boolean) => void
   onSelectMenu: (id: string) => void
+  /** Open the browser-owned workspace rename dialog seeded with the current name. */
+  onRename: (workspaceId: string, currentName: string) => void
   onNewSession: () => void
   t: CollabRowTranslate
 }) {
   const workspaceMenuItems = [
+    { id: 'rename', label: t('rename'), icon: <IconEditOutline16 /> },
     { id: 'manage', label: t('openManager'), icon: <IconPersonalizationOutline16 /> },
     { id: 'delete', label: t('deleteWorkspace'), icon: <IconTrashOutline16 />, danger: true },
   ]
@@ -477,7 +480,10 @@ function CollabWorkspaceRow({ workspace, expanded, active, path, menuOpen, onTog
           items={workspaceMenuItems}
           onSelect={(id) => {
             onMenuChange(false)
-            onSelectMenu(id)
+            // Rename routes to the browser-owned dialog (it needs the current
+            // name); the remaining declared ids dispatch through the menu.
+            if (id === 'rename') onRename(workspace.id, workspace.name)
+            else onSelectMenu(id)
           }}
           portal
           closeOnPointerLeave
@@ -644,6 +650,43 @@ export function CollabSection({
     void actions.archiveSession(sessionId).catch((reason: unknown) => {
       console.warn('collab session archive rejected:', reason)
     })
+  }
+
+  // Workspace rename dialog (browser-owned, matching the browsing region's):
+  // mirror the session dialog, but an UNCHANGED title is blocked — the shared
+  // name must actually move for confirm to mean anything. The host owns the
+  // authorization fence and name normalization; a rejection keeps the dialog
+  // open with the host message.
+  const [workspaceRenameTarget, setWorkspaceRenameTarget] = useState<{ workspaceId: string; currentName: string } | null>(null)
+  const [workspaceRenameDraft, setWorkspaceRenameDraft] = useState('')
+  const [workspaceRenaming, setWorkspaceRenaming] = useState(false)
+  const [workspaceRenameError, setWorkspaceRenameError] = useState<string | null>(null)
+  const workspaceRenameTrimmed = workspaceRenameDraft.trim()
+  const workspaceRenameBlocked = workspaceRenaming || workspaceRenameTrimmed === ''
+    || workspaceRenameTarget === null || workspaceRenameTrimmed === workspaceRenameTarget.currentName
+  const closeWorkspaceRename = (): void => {
+    if (workspaceRenaming) return
+    setWorkspaceRenameTarget(null)
+    setWorkspaceRenameError(null)
+  }
+  const confirmWorkspaceRename = (): void => {
+    if (workspaceRenameBlocked) return
+    setWorkspaceRenaming(true)
+    setWorkspaceRenameError(null)
+    actions.renameWorkspace(workspaceRenameTarget.workspaceId, workspaceRenameTrimmed).then(() => {
+      setWorkspaceRenaming(false)
+      // The list re-labels through the controller's store patch; the draft
+      // deliberately survives so reopening re-seeds it from the new name.
+      setWorkspaceRenameTarget(null)
+    }).catch((reason: unknown) => {
+      setWorkspaceRenaming(false)
+      setWorkspaceRenameError(reason instanceof Error ? reason.message : String(reason))
+    })
+  }
+  const onWorkspaceRename = (workspaceId: string, currentName: string): void => {
+    setWorkspaceRenameTarget({ workspaceId, currentName })
+    setWorkspaceRenameDraft(currentName)
+    setWorkspaceRenameError(null)
   }
 
   // Session drag: the per-workspace insert-marker state (source identity plus
@@ -927,6 +970,7 @@ export function CollabSection({
                         setMenuOpenWorkspaceId(null)
                         handleRowMenuSelect(id, workspace.id, actions)
                       }}
+                      onRename={onWorkspaceRename}
                       onNewSession={() => { actions.openWorkspace(workspace.id) }}
                       t={t}
                     />
@@ -1001,6 +1045,38 @@ export function CollabSection({
           }}
         />
         {sessionRenameError !== null && <div className={css.renameError} role="alert">{sessionRenameError}</div>}
+      </Modal>
+
+      <Modal
+        open={workspaceRenameTarget !== null}
+        onClose={closeWorkspaceRename}
+        closeLabel={t('close')}
+        title={t('renameWorkspaceTitle')}
+        footer={(
+          <>
+            <Button variant="outline" disabled={workspaceRenaming} onClick={closeWorkspaceRename}>{t('cancel')}</Button>
+            <Button variant="primary" disabled={workspaceRenameBlocked} onClick={confirmWorkspaceRename}>{t('rename')}</Button>
+          </>
+        )}
+      >
+        <input
+          className={css.renameInput}
+          value={workspaceRenameDraft}
+          aria-label={t('workspaceName')}
+          autoFocus
+          disabled={workspaceRenaming}
+          onFocus={(e) => { e.target.select() }}
+          onChange={(e) => { setWorkspaceRenameDraft(e.target.value); setWorkspaceRenameError(null) }}
+          onCompositionStart={() => { composingRef.current = true }}
+          onCompositionEnd={() => { composingRef.current = false }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !composingRef.current) {
+              e.preventDefault()
+              confirmWorkspaceRename()
+            }
+          }}
+        />
+        {workspaceRenameError !== null && <div className={css.renameError} role="alert">{workspaceRenameError}</div>}
       </Modal>
     </section>
   )

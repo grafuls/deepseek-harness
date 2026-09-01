@@ -286,6 +286,11 @@ interface MountedWorkspaceRegistryLike {
    * with the collab-origin marker (the local browsing region filters these).
    */
   create(path: string, title?: string, collabWorkspaceId?: string): Promise<MountedWorkspaceLike>
+  /**
+   * Resolve the workspace owning a canonical directory without creating or
+   * mutating it; a missing path rejects and an unowned directory is undefined.
+   */
+  resolveByPath(path: string): Promise<MountedWorkspaceLike | undefined>
 }
 
 /**
@@ -387,6 +392,39 @@ ENDPOINTS.set('collab/workspace.delete', async (ctx, principal, args) => {
   const { wsId, role } = requireWorkspaceAndRole(ctx, principal, requireString(args, 'workspaceId', 'collab/workspace.delete'))
   await ctx.collabWorkspaces.delete(role, wsId)
   return collabOk({ deleted: true })
+})
+
+ENDPOINTS.set('collab/workspace.rename', async (ctx, principal, args) => {
+  const name = requireString(args, 'name', 'collab/workspace.rename').trim()
+  if (name === '') throw new CollabWireError('collab-bad-request', 'collab: workspace name must not be empty')
+  const { wsId, role } = requireWorkspaceAndRole(ctx, principal, requireString(args, 'workspaceId', 'collab/workspace.rename'))
+  const registry = ctx.get('workspaceRegistry', false) as MountedWorkspaceRegistryLike | undefined
+  // Resolve a live mount (the workspace is open) and pre-check the new title
+  // against the registry's uniqueness BEFORE the collab record is mutated, so
+  // a conflict rejects without a half-applied rename. A workspace nobody has
+  // opened yet has no mount; a missing registry is a headless collab lane.
+  const current = ctx.collabWorkspaces.findById(wsId)
+  // requireWorkspaceAndRole proved the record exists (the maps change only
+  // through the same in-process service).
+  const dir = workspaceWorkingDir(ctx, current!)
+  await mkdir(dir, { recursive: true })
+  let mount: MountedWorkspaceLike | undefined = undefined
+  if (registry !== undefined) {
+    mount = await registry.resolveByPath(dir)
+    if (mount !== undefined) {
+      const live = mount
+      if (registry.list().some(other => other.id !== live.id && other.title === name)) {
+        throw new CollabWireError('collab-name-conflict', `collab: another workspace is already named '${name}'`)
+      }
+    }
+  }
+  const record = await ctx.collabWorkspaces.renameWorkspace(role, principal.userId, wsId, name)
+  // Keep a live mount's Host title in sync for every member; a workspace that
+  // is not open picks the new title up from the record on its next open.
+  if (mount !== undefined && mount.title !== record.name) {
+    await mount.setTitle(record.name)
+  }
+  return collabOk(recordView(record, principal.userId))
 })
 
 ENDPOINTS.set('collab/workspace.setMemberRole', async (ctx, principal, args) => {

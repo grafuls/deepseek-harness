@@ -36,6 +36,7 @@ The `collab/*` endpoints ride the shared `/api` channel with the standard JSON-R
 | `collab/workspace.join` | accept an invitation addressed to the caller |
 | `collab/workspace.leave` | leave a workspace (the owner must delete instead) |
 | `collab/workspace.delete` | delete a workspace; workspace-owner only |
+| `collab/workspace.rename` | rename a workspace (the shared name change applies for every member, and a live mount's Host title is re-asserted); workspace-admin only |
 | `collab/workspace.setMemberRole` | change a member's role; workspace-admin only |
 | `collab/workspace.removeMember` | remove a member; workspace-admin only |
 | `collab/workspace.open` | mount a collab workspace as a real Host workspace over its reserved data directory (a member may open it); the Host registry resolves the same workspace for every member, and the Host plane serves it and its sessions only to members |

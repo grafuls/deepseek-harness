@@ -372,6 +372,27 @@ export class CollabWorkspacesController {
   }
 
   /**
+   * Rename a collab workspace by id (the section row's dialog). The host owns
+   * the authorization fence; on success the shared list is patched with the
+   * renamed view so every surface re-labels in place. Unlike the banner-driven
+   * mutations, a failure PROPAGATES (the dialog keeps its error open) and
+   * leaves the store banner quiet — the dialog owns the failure copy.
+   * @param workspaceId - the collab workspace to rename.
+   * @param name - the new display name.
+   * @returns the renamed workspace view.
+   * @throws when the host rejects the rename.
+   */
+  async renameWorkspace(workspaceId: string, name: string): Promise<CollabWorkspacesState['workspaces'][number]> {
+    const renamed = await this.api.renameWorkspace(workspaceId, name)
+    const current = this.store.getSnapshot()
+    this.store.set({
+      ...current,
+      workspaces: current.workspaces.map(workspace => workspace.id === workspaceId ? renamed : workspace),
+    })
+    return renamed
+  }
+
+  /**
    * Invite a user by email to the selected workspace.
    * @param email - the invitee's email.
    * @param role - the role the invite grants.

@@ -285,6 +285,11 @@ function fakeWorkspaceRegistry(dir: string): {
       }
       return entity
     },
+    // The real registry resolves the workspace owning a canonical path without
+    // materializing one; only a workspace opened in this lane has a path.
+    resolveByPath: async (path: string): Promise<typeof entity | undefined> => {
+      return createdPaths.has(path) ? entity : undefined
+    },
   }
   return {
     register: (ctx) => { ctx.provide('workspaceRegistry', registry) },
@@ -608,6 +613,69 @@ describe('collab/workspace methods', () => {
     const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Team' })) as CollabWorkspaceView
     const result = await call(boot, boot.admin, 'collab/workspace.open', { workspaceId: created.id })
     expectCollabError(result, 'collab-internal')
+  })
+
+  it('renames a workspace for an admin and persists the new name in the list', async () => {
+    const boot = await bootServices()
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Team' })) as CollabWorkspaceView
+    const renamed = value(await call(boot, boot.admin, 'collab/workspace.rename', {
+      workspaceId: created.id,
+      name: 'Engineering',
+    })) as CollabWorkspaceView
+    expect(renamed.name).toBe('Engineering')
+    expect(renamed.id).toBe(created.id)
+    const listed = value(await call(boot, boot.admin, 'collab/workspace.list', {})) as CollabWorkspaceView[]
+    expect(listed.find(entry => entry.id === created.id)?.name).toBe('Engineering')
+  })
+
+  it('rejects a blank name and a developer rename', async () => {
+    const boot = await bootServices()
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Team' })) as CollabWorkspaceView
+    const blank = await call(boot, boot.admin, 'collab/workspace.rename', { workspaceId: created.id, name: '   ' })
+    expectCollabError(blank, 'collab-bad-request')
+    // A developer member cannot rename a shared workspace (admin-only).
+    const invitation = value(await call(boot, boot.admin, 'collab/workspace.invite', {
+      workspaceId: created.id,
+      email: boot.member.email,
+      role: 'developer',
+    })) as { id: string }
+    value(await call(boot, boot.member, 'collab/workspace.join', { invitationId: invitation.id }))
+    const denied = await call(boot, boot.member, 'collab/workspace.rename', { workspaceId: created.id, name: 'Eng' })
+    expectCollabError(denied, 'collab-forbidden')
+  })
+
+  it('keeps a live mount host title in sync and rejects a title conflict before mutating', async () => {
+    const boot = await bootServices()
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Team' })) as CollabWorkspaceView
+    const dir = workspaceDataDir(boot.ctx.collabWorkspaces.root, created.id)
+    const fake = fakeWorkspaceRegistry(dir)
+    fake.register(boot.ctx)
+    await call(boot, boot.admin, 'collab/workspace.open', { workspaceId: created.id })
+    // The collab rename re-asserts the mounted host workspace's title.
+    await call(boot, boot.admin, 'collab/workspace.rename', { workspaceId: created.id, name: 'Eng' })
+    expect(fake.entity.title).toBe('Eng')
+    // A title another host workspace holds rejects BEFORE the collab record
+    // changes: the list still carries the old name after the refusal.
+    fake.addConflict('host-ws-2', 'Busy')
+    const conflicted = await call(boot, boot.admin, 'collab/workspace.rename', { workspaceId: created.id, name: 'Busy' })
+    expectCollabError(conflicted, 'collab-name-conflict')
+    const listed = value(await call(boot, boot.admin, 'collab/workspace.list', {})) as CollabWorkspaceView[]
+    expect(listed.find(entry => entry.id === created.id)?.name).toBe('Eng')
+  })
+
+  it('renames a workspace that has never been opened (no mount to sync)', async () => {
+    const boot = await bootServices()
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Team' })) as CollabWorkspaceView
+    const dir = workspaceDataDir(boot.ctx.collabWorkspaces.root, created.id)
+    const fake = fakeWorkspaceRegistry(dir)
+    fake.register(boot.ctx)
+    // No `open` yet: resolveByPath finds no mount and the rename applies cleanly.
+    const renamed = value(await call(boot, boot.admin, 'collab/workspace.rename', {
+      workspaceId: created.id,
+      name: 'Eng',
+    })) as CollabWorkspaceView
+    expect(renamed.name).toBe('Eng')
+    expect(fake.createCalls).toEqual([])
   })
 
   it('invites, lists, and revokes invitations with admin-only role gating', async () => {

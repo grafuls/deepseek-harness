@@ -55,6 +55,7 @@ describe('workspace role permissions', () => {
       'workspace.manage',
       'workspace.members.manage',
       'workspace.members.read',
+      'workspace.rename',
       'workspace.use',
     ])
   })
@@ -64,6 +65,7 @@ describe('workspace role permissions', () => {
     expect(hasWorkspacePermission('developer', 'workspace.invite')).toBe(false)
     expect(hasWorkspacePermission('developer', 'workspace.members.manage')).toBe(false)
     expect(hasWorkspacePermission('developer', 'workspace.delete')).toBe(false)
+    expect(hasWorkspacePermission('developer', 'workspace.rename')).toBe(false)
   })
 })
 

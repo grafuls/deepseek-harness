@@ -9,7 +9,7 @@ Role-based access control policy for the multi-user collab layer: two independen
 Two planes mirror the product's two trust scopes:
 
 - Instance plane (`GlobalRole`: `admin` | `member`) — `admin` adds instance-wide user management (`users.read`, `users.manage`) to everything a `member` holds; `member` holds `users.self`, `workspace.create`, and `workspace.join`.
-- Workspace plane (`WorkspaceRole`: `admin` | `developer`) — `admin` adds workspace management (`workspace.delete`, `workspace.invite`, `workspace.manage`, `workspace.members.manage`) to everything a `developer` holds; `developer` holds `workspace.use` and `workspace.members.read`.
+- Workspace plane (`WorkspaceRole`: `admin` | `developer`) — `admin` adds workspace management (`workspace.delete`, `workspace.invite`, `workspace.manage`, `workspace.members.manage`, `workspace.rename`) to everything a `developer` holds; `developer` holds `workspace.use` and `workspace.members.read`.
 
 The permission maps are exported (`GLOBAL_ROLE_PERMISSIONS`, `WORKSPACE_ROLE_PERMISSIONS`) so a role change updates one table and every consumer observes it.
 

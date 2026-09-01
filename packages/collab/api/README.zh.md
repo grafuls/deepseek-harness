@@ -36,6 +36,7 @@ Collab API 网关：一个函数插件，把共享的 harness 进程转变为 Go
 | `collab/workspace.join` | 接受发给调用者的邀请 |
 | `collab/workspace.leave` | 离开 workspace（所有者必须改为删除） |
 | `collab/workspace.delete` | 删除 workspace；仅 workspace 所有者 |
+| `collab/workspace.rename` | 重命名 workspace（共享名称变更对每个成员生效，并会同步活动挂载的 Host 标题）；仅 workspace 管理员 |
 | `collab/workspace.setMemberRole` | 修改成员角色；仅 workspace 管理员 |
 | `collab/workspace.removeMember` | 移除成员；仅 workspace 管理员 |
 | `collab/workspace.open` | 把 collab 工作区挂载为保留数据目录之上的真实主机工作区（成员即可打开）；主机注册表为每个成员解析到同一个工作区，且 Host 平面只为成员提供它及其会话 |

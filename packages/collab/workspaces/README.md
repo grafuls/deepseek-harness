@@ -60,6 +60,7 @@ await ctx.collabWorkspaces.leave(actorWorkspaceRole, memberId, wsId) // needs wo
 const members: WorkspaceMember[] = await ctx.collabWorkspaces.listMembers(adminWorkspaceRole, wsId) // needs workspace.members.read
 await ctx.collabWorkspaces.setMemberRole(adminWorkspaceRole, wsId, memberId, 'developer') // needs workspace.members.manage
 await ctx.collabWorkspaces.removeMember(adminWorkspaceRole, wsId, memberId) // needs workspace.members.manage
+await ctx.collabWorkspaces.renameWorkspace(adminWorkspaceRole, actorId, wsId, 'New name') // needs workspace.rename
 await ctx.collabWorkspaces.delete(adminWorkspaceRole, wsId) // needs workspace.delete
 ```
 

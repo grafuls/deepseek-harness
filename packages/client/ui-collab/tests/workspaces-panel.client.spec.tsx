@@ -34,6 +34,7 @@ function actions(): CollabWorkspacesActions {
     renameSession: vi.fn(async () => { }),
     forkSession: vi.fn(),
     archiveSession: vi.fn(async () => { }),
+    renameWorkspace: vi.fn(async () => { }),
     delete: vi.fn(),
     setGroupBy: vi.fn(),
     setOrderBy: vi.fn(),

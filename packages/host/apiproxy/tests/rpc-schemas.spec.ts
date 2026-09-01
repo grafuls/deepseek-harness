@@ -80,6 +80,13 @@ describe('rpcErrorSchema', () => {
     // The credentials producer still emits this code, so the branch has to stay.
     expect(rpcErrorSchema.parse({ code: 'credential-rejected', message: 'm', details: { ref: 'r' } }).code).toBe('credential-rejected')
     expect(rpcErrorSchema.parse({ code: 'internal', message: 'm', details: {} }).code).toBe('internal')
+    // The collab gateway's error plane rides the same envelope.
+    expect(rpcErrorSchema.parse({ code: 'collab-bad-request', message: 'm', details: {} }).code).toBe('collab-bad-request')
+    expect(rpcErrorSchema.parse({ code: 'collab-clone-pending', message: 'm', details: {} }).code).toBe('collab-clone-pending')
+    expect(rpcErrorSchema.parse({ code: 'collab-forbidden', message: 'm', details: {} }).code).toBe('collab-forbidden')
+    expect(rpcErrorSchema.parse({ code: 'collab-internal', message: 'm', details: {} }).code).toBe('collab-internal')
+    expect(rpcErrorSchema.parse({ code: 'collab-name-conflict', message: 'm', details: {} }).code).toBe('collab-name-conflict')
+    expect(rpcErrorSchema.parse({ code: 'collab-not-found', message: 'm', details: {} }).code).toBe('collab-not-found')
   })
 
   it('rejects a known code with missing details', () => {

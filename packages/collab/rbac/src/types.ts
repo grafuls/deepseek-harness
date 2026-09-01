@@ -41,6 +41,7 @@ export type WorkspacePermission =
   | 'workspace.manage'
   | 'workspace.members.manage'
   | 'workspace.members.read'
+  | 'workspace.rename'
   | 'workspace.use'
 
 /** Every permission of both planes. */

@@ -76,6 +76,16 @@ export const rpcErrorSchema: z.ZodType<RpcError> = z.discriminatedUnion('code', 
   z.object({ code: z.literal('subagent-unauthorized'), message: z.string(), details: z.object({ childSessionId: z.string() }) }),
   z.object({ code: z.literal('subagent-delivery-unavailable'), message: z.string(), details: z.object({ childSessionId: z.string() }) }),
   z.object({ code: z.literal('internal'), message: z.string(), details: z.object({}) }),
+  // The collab gateway's error plane rides the shared envelope (its codes are
+  // typed in dsh-collab-api's RpcErrorDetailsMap augmentation, mirrored here
+  // for the runtime schema); collab errors carry no details — the message
+  // names the refusenik.
+  z.object({ code: z.literal('collab-bad-request'), message: z.string(), details: z.object({}) }),
+  z.object({ code: z.literal('collab-clone-pending'), message: z.string(), details: z.object({}) }),
+  z.object({ code: z.literal('collab-forbidden'), message: z.string(), details: z.object({}) }),
+  z.object({ code: z.literal('collab-internal'), message: z.string(), details: z.object({}) }),
+  z.object({ code: z.literal('collab-name-conflict'), message: z.string(), details: z.object({}) }),
+  z.object({ code: z.literal('collab-not-found'), message: z.string(), details: z.object({}) }),
 ]) as unknown as z.ZodType<RpcError>
 
 /**

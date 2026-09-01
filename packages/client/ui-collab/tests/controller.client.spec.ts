@@ -501,6 +501,32 @@ describe('CollabWorkspacesController', () => {
     expect(seen).toEqual(['collab/workspace.delete'])
   })
 
+  it('renames a workspace in place and re-labels only the target record', async () => {
+    const renamed: CollabWorkspaceView = { ...WORKSPACE, name: 'Eng' }
+    const second: CollabWorkspaceView = { id: 'w2', name: 'Beta', memberCount: 3, isOwner: false, role: 'developer', createdAt: '2021-01-01T00:00:00.000Z', cloneState: 'ready' }
+    const { store, controller, seen } = harness({
+      'collab/workspace.rename': [ok(renamed)],
+    })
+    store.set({ ...store.getSnapshot(), workspaces: [WORKSPACE, second], selectedId: undefined })
+    await expect(controller.renameWorkspace('w1', 'Eng')).resolves.toEqual(renamed)
+    const after = store.getSnapshot()
+    expect(after.workspaces).toEqual([renamed, second])
+    expect(seen).toEqual(['collab/workspace.rename'])
+  })
+
+  it('a rejected rename propagates and leaves the store banner quiet', async () => {
+    const { store, controller, seen } = harness({
+      'collab/workspace.rename': [refusal('collab-forbidden')],
+    })
+    store.set({ ...store.getSnapshot(), workspaces: [WORKSPACE], selectedId: undefined })
+    await expect(controller.renameWorkspace('w1', 'Eng')).rejects.toThrow('collab-forbidden')
+    const after = store.getSnapshot()
+    // The shared list is untouched and no banner folds in (the dialog owns the copy).
+    expect(after.workspaces).toEqual([WORKSPACE])
+    expect(after.error).toBeUndefined()
+    expect(seen).toEqual(['collab/workspace.rename'])
+  })
+
   it('a no-target mutation is a safe no-op', async () => {
     const { store, controller, seen } = harness()
     await expect(controller.invite('lina@example.com', 'developer')).resolves.toBeUndefined()

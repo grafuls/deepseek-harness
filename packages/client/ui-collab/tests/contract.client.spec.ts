@@ -83,6 +83,16 @@ describe('CollabApi', () => {
     await expect(api.deleteWorkspace('w1')).resolves.toBeUndefined()
   })
 
+  it('renames workspaces through the wire endpoint', async () => {
+    const renamed = { id: 'w1', name: 'Eng', memberCount: 2, isOwner: false, role: 'admin', createdAt: '2020-01-01T00:00:00.000Z', cloneState: 'ready' }
+    const { call, seen } = fakeCall([
+      { endpoint: 'collab/workspace.rename', payload: { workspaceId: 'w1', name: 'Eng' }, result: ok(renamed) },
+    ])
+    const api = new CollabApi(call)
+    await expect(api.renameWorkspace('w1', 'Eng')).resolves.toEqual(renamed)
+    expect(seen[0]!.payload).toEqual({ workspaceId: 'w1', name: 'Eng' })
+  })
+
   it('lists the pending invitations addressed to the user and joins by invitation id', async () => {
     const mine = { id: 'i1', workspaceId: 'w1', workspaceName: 'Alpha', role: 'admin', createdAt: '2020-01-01T00:00:00.000Z' }
     const joined = { id: 'w1', name: 'Alpha', memberCount: 2, isOwner: false, role: 'admin', createdAt: '2020-01-01T00:00:00.000Z', cloneState: 'ready' }

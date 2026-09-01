@@ -60,6 +60,7 @@ await ctx.collabWorkspaces.leave(actorWorkspaceRole, memberId, wsId) // needs wo
 const members: WorkspaceMember[] = await ctx.collabWorkspaces.listMembers(adminWorkspaceRole, wsId) // needs workspace.members.read
 await ctx.collabWorkspaces.setMemberRole(adminWorkspaceRole, wsId, memberId, 'developer') // needs workspace.members.manage
 await ctx.collabWorkspaces.removeMember(adminWorkspaceRole, wsId, memberId) // needs workspace.members.manage
+await ctx.collabWorkspaces.renameWorkspace(adminWorkspaceRole, actorId, wsId, 'New name') // needs workspace.rename
 await ctx.collabWorkspaces.delete(adminWorkspaceRole, wsId) // needs workspace.delete
 ```
 每个变更方法都显式接收执行者的角色，并在做出决策的操作点将裁决委托给 `dsh-collab-rbac`，因此持有 `developer` 角色的成员不能邀请或管理。

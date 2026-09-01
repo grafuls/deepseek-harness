@@ -9,7 +9,7 @@
 两个平面对应于产品内的两种信任作用域：
 
 - 实例平面（`GlobalRole`：`admin` | `member`）——`admin` 在 `member` 持有的一切之外，追加实例级用户管理（`users.read`、`users.manage`）；`member` 持有 `users.self`、`workspace.create` 与 `workspace.join`。
-- 工作区平面（`WorkspaceRole`：`admin` | `developer`）——`admin` 在 `developer` 持有的一切之外，追加工作区管理（`workspace.delete`、`workspace.invite`、`workspace.manage`、`workspace.members.manage`）；`developer` 持有 `workspace.use` 与 `workspace.members.read`。
+- 工作区平面（`WorkspaceRole`：`admin` | `developer`）——`admin` 在 `developer` 持有的一切之外，追加工作区管理（`workspace.delete`、`workspace.invite`、`workspace.manage`、`workspace.members.manage`、`workspace.rename`）；`developer` 持有 `workspace.use` 与 `workspace.members.read`。
 
 权限映射表被导出（`GLOBAL_ROLE_PERMISSIONS`、`WORKSPACE_ROLE_PERMISSIONS`），因此角色变更只需更新一张表，所有消费者都能观察到。
 

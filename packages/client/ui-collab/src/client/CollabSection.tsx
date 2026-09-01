@@ -17,10 +17,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import clsx from 'clsx'
 import {
-  HoverCard, IconCloseFill14, IconEllipsisOutline16, IconFolderClose16,
-  IconFolderOpen16, IconPersonalizationOutline16, IconPlusOutline16,
-  IconProjectAddOutline16, IconSearchOutline16, IconTrashOutline16,
-  IconTriangleRightFill14, Menu, StateDot, Tooltip,
+  Button, HoverCard, IconArchiveOutline20, IconBranchOutline16, IconCloseFill14,
+  IconEditOutline16, IconEllipsisOutline16, IconFolderClose16, IconFolderOpen16,
+  IconPersonalizationOutline16, IconPlusOutline16, IconProjectAddOutline16,
+  IconSearchOutline16, IconTrashOutline16, IconTriangleRightFill14, Menu,
+  Modal, StateDot, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   SessionId, SessionSummary, WorkspaceView,
@@ -305,12 +306,12 @@ function CollabWorkspaceHoverContent({ label, path, count, createdAt, t }: {
 
 /**
  * One collab session row, mirroring the browsing region's session row: a
- * status slot, the display title, relative time, the selected highlight, and
- * a hover card. Shared sessions are read-only, so the row carries no
- * rename/fork/archive actions menu; drag wiring (same-workspace markers only)
- * is what lets members reorder the shared order.
+ * status slot, the display title, relative time, a hover-revealed row menu
+ * (rename/fork/archive, blank placeholders carry no verbs), the selected
+ * highlight, and a hover card. Drag wiring (same-workspace markers only) is
+ * what lets members reorder the shared order.
  */
-function CollabSessionRow({ summary, current, now, onOpen, drag, flat = false, t }: {
+function CollabSessionRow({ summary, current, now, onOpen, drag, flat = false, onRename, onFork, onArchive, t }: {
   summary: SessionSummary
   current: SessionId | undefined
   now: number
@@ -318,6 +319,12 @@ function CollabSessionRow({ summary, current, now, onOpen, drag, flat = false, t
   /** The row's drag wiring (every collab session row is draggable). */
   drag: CollabRowDragProps
   flat?: boolean
+  /** Open the browser-owned rename dialog seeded with the current title. */
+  onRename: (sessionId: SessionId, currentTitle: string) => void
+  /** Fork the shared session into a child and open it. */
+  onFork: (sessionId: SessionId) => void
+  /** Archive the shared session for every member. */
+  onArchive: (sessionId: SessionId) => void
   t: CollabRowTranslate
 }) {
   const title = collabSessionTitle(summary, t)
@@ -325,10 +332,21 @@ function CollabSessionRow({ summary, current, now, onOpen, drag, flat = false, t
   const statuses = collabSessionStatuses(summary, t)
   const primaryStatus = statuses[0]
   const showStatus = primaryStatus.state !== 'done' || summary.completed === true
+  // The row menu lives in the row (mirroring the browsing region) so the open
+  // state survives the HoverCard's pointer capture; an open menu pins the
+  // reveal and suppresses the card.
+  const [menuOpen, setMenuOpen] = useState(false)
+  // The three declared ids are the whole domain the Menu can hand back.
+  const sessionMenuItems = [
+    { id: 'rename', label: t('rename'), icon: <IconEditOutline16 /> },
+    { id: 'fork', label: t('fork'), icon: <IconBranchOutline16 /> },
+    // 20-native glyph in the menu's 16px icon slot.
+    { id: 'archive', label: t('archiveSession'), icon: <IconArchiveOutline20 size={16} /> },
+  ]
   const ownRow = (
     <div
       className={clsx(
-        css.sessionRow, selected && css.selected,
+        css.sessionRow, selected && css.selected, menuOpen && css.menuOpen,
         drag.marker === 'before' && css.dropBefore, drag.marker === 'after' && css.dropAfter,
         flat && !showStatus && css.flatSessionRowWithoutStatus,
       )}
@@ -362,14 +380,45 @@ function CollabSessionRow({ summary, current, now, onOpen, drag, flat = false, t
       )}
       <span className={css.title}>{title}</span>
       {/* A blank New Session row is a provisional placeholder: nothing has
-          happened in it yet, so no "now" timestamp is shown. */}
+          happened in it yet, so no "now" timestamp and no row verbs (rename/
+          fork/archive would all act on content that does not exist). */}
       {!summary.blank && <span className={css.time}>{timeLabel(summary.updatedAt, now, t)}</span>}
+      {!summary.blank && (
+        <span className={css.rowActions}>
+          <Menu
+            open={menuOpen}
+            onClose={() => { setMenuOpen(false) }}
+            items={sessionMenuItems}
+            onSelect={(id) => {
+              setMenuOpen(false)
+              // The three declared ids are the whole domain the Menu hands
+              // back; each routes to its row callback.
+              if (id === 'rename') onRename(summary.id, summary.displayTitle)
+              if (id === 'fork') onFork(summary.id)
+              if (id === 'archive') onArchive(summary.id)
+            }}
+            portal
+            closeOnPointerLeave
+            anchor={(
+              <button
+                type="button"
+                className={css.rowIconButton}
+                aria-label={t('sessionActionsAria', { name: title })}
+                onClick={(e) => { e.stopPropagation(); setMenuOpen(v => !v) }}
+              >
+                <IconEllipsisOutline16 />
+              </button>
+            )}
+          />
+        </span>
+      )}
     </div>
   )
   return (
     <HoverCard
       anchor={ownRow}
       content={<CollabSessionHoverContent summary={summary} now={now} t={t} />}
+      disabled={menuOpen || drag.active === true}
       copyText={summary.blank ? undefined : summary.displayTitle}
       copyLabel={t('copy')}
       copiedLabel={t('hoverCopied')}
@@ -551,6 +600,49 @@ export function CollabSection({
       if (next.has(workspaceId)) next.delete(workspaceId)
       else next.add(workspaceId)
       return next
+    })
+  }
+
+  // Session rename dialog (browser-owned so it outlives row unmounts during
+  // collapse; same pattern as the browsing region). Sessions have no
+  // client-side name-conflict rule — the host normalizes — and an unchanged
+  // title is NOT blocked: confirming the current title is the gesture that
+  // pins it. The draft deliberately survives a successful confirm and a
+  // cancel, so reopening re-seeds it from the row's current title.
+  const composingRef = useRef(false)
+  const [sessionRenameTarget, setSessionRenameTarget] = useState<{ sessionId: SessionId; currentTitle: string } | null>(null)
+  const [sessionRenameDraft, setSessionRenameDraft] = useState('')
+  const [sessionRenaming, setSessionRenaming] = useState(false)
+  const [sessionRenameError, setSessionRenameError] = useState<string | null>(null)
+  const sessionRenameTrimmed = sessionRenameDraft.trim()
+  const sessionRenameBlocked = sessionRenaming || sessionRenameTrimmed === '' || sessionRenameTarget === null
+  const closeSessionRename = (): void => {
+    if (sessionRenaming) return
+    setSessionRenameTarget(null)
+    setSessionRenameError(null)
+  }
+  const confirmSessionRename = (): void => {
+    if (sessionRenameBlocked) return
+    setSessionRenaming(true)
+    setSessionRenameError(null)
+    actions.renameSession(sessionRenameTarget.sessionId, sessionRenameTrimmed).then(() => {
+      setSessionRenaming(false)
+      setSessionRenameTarget(null)
+    }).catch((reason: unknown) => {
+      setSessionRenaming(false)
+      setSessionRenameError(reason instanceof Error ? reason.message : String(reason))
+    })
+  }
+  const onSessionRename = (sessionId: SessionId, currentTitle: string): void => {
+    setSessionRenameTarget({ sessionId, currentTitle })
+    setSessionRenameDraft(currentTitle)
+    setSessionRenameError(null)
+  }
+  const onSessionArchive = (sessionId: SessionId): void => {
+    // Archive is dialog-free: the row disappears when the archive-set echo
+    // lands; failures are non-fatal console diagnostics (the reorder posture).
+    void actions.archiveSession(sessionId).catch((reason: unknown) => {
+      console.warn('collab session archive rejected:', reason)
     })
   }
 
@@ -792,6 +884,9 @@ export function CollabSection({
                       sessionDrag, entry.workspaceId, entry.summary.id,
                       commitDrag, setSessionDrag, sessionDropCommitted,
                     )}
+                    onRename={onSessionRename}
+                    onFork={(id) => { actions.forkSession(id) }}
+                    onArchive={onSessionArchive}
                     flat
                     t={t}
                   />
@@ -849,6 +944,9 @@ export function CollabSection({
                           commitsByWorkspace.get(workspace.id)!,
                           setSessionDrag, sessionDropCommitted,
                         )}
+                        onRename={onSessionRename}
+                        onFork={(id) => { actions.forkSession(id) }}
+                        onArchive={onSessionArchive}
                         t={t}
                       />
                     ))}
@@ -870,6 +968,40 @@ export function CollabSection({
             </div>
           )}
       </div>
+
+      {/* The modal portals to document.body, so it can render inside the
+          section while the mask covers the whole viewport. */}
+      <Modal
+        open={sessionRenameTarget !== null}
+        onClose={closeSessionRename}
+        closeLabel={t('close')}
+        title={t('renameSessionTitle')}
+        footer={(
+          <>
+            <Button variant="outline" disabled={sessionRenaming} onClick={closeSessionRename}>{t('cancel')}</Button>
+            <Button variant="primary" disabled={sessionRenameBlocked} onClick={confirmSessionRename}>{t('rename')}</Button>
+          </>
+        )}
+      >
+        <input
+          className={css.renameInput}
+          value={sessionRenameDraft}
+          aria-label={t('fieldSessionName')}
+          autoFocus
+          disabled={sessionRenaming}
+          onFocus={(e) => { e.target.select() }}
+          onChange={(e) => { setSessionRenameDraft(e.target.value); setSessionRenameError(null) }}
+          onCompositionStart={() => { composingRef.current = true }}
+          onCompositionEnd={() => { composingRef.current = false }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !composingRef.current) {
+              e.preventDefault()
+              confirmSessionRename()
+            }
+          }}
+        />
+        {sessionRenameError !== null && <div className={css.renameError} role="alert">{sessionRenameError}</div>}
+      </Modal>
     </section>
   )
 }

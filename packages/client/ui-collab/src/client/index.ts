@@ -90,6 +90,23 @@ export function apply(ctx: ClientContext): void {
       openWorkspace: (workspaceId) => { void controller.openWorkspace(workspaceId) },
       mountAll: () => { void controller.mountAll() },
       open: (sessionId) => { ctx.sessions.open(sessionId) },
+      // Row → session-face hop (same as the browsing region): rename is a
+      // per-session verb (ISession), resolved by the list binding; a rejection
+      // propagates to the browser's rename dialog.
+      renameSession: async (sessionId, title) => {
+        const session = ctx.sessions.binding(sessionId)?.session
+        if (session === undefined) throw new Error(`unknown session "${sessionId}"`)
+        const result = await session.rename(title)
+        if (!result.ok) throw new Error(result.error.message)
+      },
+      // Fork failure keeps the current selection (the browsing region's
+      // posture): the shared session and its log are unchanged.
+      forkSession: (sessionId) => {
+        ctx.sessions.fork({ sessionId, increaseTitle: true })
+          .then((childId) => { ctx.sessions.open(childId) })
+          .catch(() => { /* Fork or child-rename failure keeps the selection. */ })
+      },
+      archiveSession: (sessionId) => ctx.workspaces.archiveSession(sessionId),
       reorderSession: (hostWorkspaceId, sessionId, beforeSessionId) => {
         void controller.reorderSession(hostWorkspaceId, sessionId, beforeSessionId)
       },

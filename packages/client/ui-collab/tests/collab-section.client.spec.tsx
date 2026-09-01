@@ -72,6 +72,9 @@ function actions(): CollabWorkspacesActions {
     openWorkspace: vi.fn(),
     mountAll: vi.fn(),
     open: vi.fn(),
+    renameSession: vi.fn(async () => { }),
+    forkSession: vi.fn(),
+    archiveSession: vi.fn(async () => { }),
     delete: vi.fn(),
     setGroupBy: vi.fn(),
     setOrderBy: vi.fn(),
@@ -431,6 +434,210 @@ describe('CollabSection', () => {
     // chrome (open + the active tint class is applied to its leading slot).
     const row = screen.getByRole('treeitem', { name: 'Alpha' })
     expect(row.querySelectorAll('span').length).toBeGreaterThan(0)
+  })
+
+  it('offers Rename/Fork/Archive on a non-blank session row through its hover menu', () => {
+    section(
+      readyState(),
+      {},
+      {
+        sessions: [sessionSummary('s1', 5), sessionSummary('s2', 1)],
+        workspaces: [hostWorkspace('hw1', 'w1', ['s1', 's2'], 'Alpha')],
+      },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Session actions for s1' }))
+    expect(screen.getByRole('menuitem', { name: 'Rename' })).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: 'Fork' })).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: 'Archive session' })).toBeTruthy()
+  })
+
+  it('carries no hover menu on a blank New Session placeholder', () => {
+    section(
+      readyState(),
+      {},
+      {
+        sessions: [sessionSummary('s-blank', 1, { blank: true })],
+        workspaces: [hostWorkspace('hw1', 'w1', ['s-blank'], 'Alpha')],
+        current: sid('s-blank'),
+      },
+    )
+    expect(screen.getByRole('treeitem', { name: 'New Session' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Session actions/ })).toBeNull()
+  })
+
+  it('opens the session on row click but not on its menu button', () => {
+    const open = vi.fn()
+    section(
+      readyState(),
+      { open },
+      { sessions: [sessionSummary('s1', 5)], workspaces: [hostWorkspace('hw1', 'w1', ['s1'], 'Alpha')] },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Session actions for s1' }))
+    expect(open).not.toHaveBeenCalled()
+    // The menu list sits in a portal; clicking the row itself still opens it.
+    fireEvent.click(screen.getByRole('treeitem', { name: 's1' }))
+    expect(open).toHaveBeenCalledWith(sid('s1'))
+  })
+
+  it('forks a shared session from its row menu', () => {
+    const forkSession = vi.fn()
+    section(
+      readyState(),
+      { forkSession },
+      { sessions: [sessionSummary('s1', 5)], workspaces: [hostWorkspace('hw1', 'w1', ['s1'], 'Alpha')] },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Session actions for s1' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Fork' }))
+    expect(forkSession).toHaveBeenCalledWith(sid('s1'))
+  })
+
+  it('archives a shared session from its row menu and surfaces a rejection as a warning', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => { })
+    const archiveSession = vi.fn(async () => { throw new Error('denied') })
+    try {
+      section(
+        readyState(),
+        { archiveSession },
+        { sessions: [sessionSummary('s1', 5)], workspaces: [hostWorkspace('hw1', 'w1', ['s1'], 'Alpha')] },
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Session actions for s1' }))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Archive session' }))
+      expect(archiveSession).toHaveBeenCalledWith(sid('s1'))
+      await waitFor(() => { expect(warn).toHaveBeenCalledTimes(1) })
+      const call = warn.mock.calls[0]!
+      expect(call[0]!).toBe('collab session archive rejected:')
+      expect(call[1]).toBeInstanceOf(Error)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('shows the same session row menu in flat mode and forks from it', () => {
+    const forkSession = vi.fn()
+    section(
+      readyState({ groupBy: 'flat', orderBy: 'manual' }),
+      { forkSession },
+      { sessions: [sessionSummary('s1', 5)], workspaces: [hostWorkspace('hw1', 'w1', ['s1'], 'Alpha')] },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Session actions for s1' }))
+    expect(screen.getByRole('menuitem', { name: 'Rename' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Fork' }))
+    expect(forkSession).toHaveBeenCalledWith(sid('s1'))
+  })
+
+  it('closes the session row menu through Escape', () => {
+    section(
+      readyState(),
+      {},
+      { sessions: [sessionSummary('s1', 5)], workspaces: [hostWorkspace('hw1', 'w1', ['s1'], 'Alpha')] },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Session actions for s1' }))
+    expect(screen.getByRole('menuitem', { name: 'Fork' })).toBeTruthy()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('menuitem', { name: 'Fork' })).toBeNull()
+  })
+
+  it('renames a shared session through the dialog: seeded draft, confirm closes', async () => {
+    const renameSession = vi.fn(async () => { })
+    section(
+      readyState(),
+      { renameSession },
+      { sessions: [sessionSummary('s1', 5)], workspaces: [hostWorkspace('hw1', 'w1', ['s1'], 'Alpha')] },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Session actions for s1' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
+    const input = screen.getByLabelText<HTMLInputElement>('Session name')
+    expect(input.value).toBe('s1')
+    fireEvent.change(input, { target: { value: 'Research log' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    await waitFor(() => { expect(renameSession).toHaveBeenCalledWith(sid('s1'), 'Research log') })
+    await waitFor(() => { expect(screen.queryByRole('dialog')).toBeNull() })
+  })
+
+  it('keeps the rename from an empty draft and while composing, then commits on Enter', async () => {
+    const renameSession = vi.fn(async () => { })
+    section(
+      readyState(),
+      { renameSession },
+      { sessions: [sessionSummary('s1', 5)], workspaces: [hostWorkspace('hw1', 'w1', ['s1'], 'Alpha')] },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Session actions for s1' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
+    const input = screen.getByLabelText<HTMLInputElement>('Session name')
+    expect(input.value).toBe('s1')
+    // A blank draft blocks the confirm even through the Enter accelerator.
+    fireEvent.change(input, { target: { value: '   ' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(renameSession).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    // While an IME composition is active Enter must not commit half a word.
+    fireEvent.compositionStart(input)
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(renameSession).not.toHaveBeenCalled()
+    fireEvent.compositionEnd(input)
+    fireEvent.change(input, { target: { value: 'Research log' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => { expect(renameSession).toHaveBeenCalledWith(sid('s1'), 'Research log') })
+    await waitFor(() => { expect(screen.queryByRole('dialog')).toBeNull() })
+  })
+
+  it('a rejected rename keeps the dialog open with the error surfaced; typing clears it', async () => {
+    const renameSession = vi.fn(async () => { throw new Error('rename conflict') })
+    section(
+      readyState(),
+      { renameSession },
+      { sessions: [sessionSummary('s1', 5)], workspaces: [hostWorkspace('hw1', 'w1', ['s1'], 'Alpha')] },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Session actions for s1' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
+    const input = screen.getByLabelText('Session name')
+    fireEvent.change(input, { target: { value: 'Renamed' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe('rename conflict') })
+    fireEvent.change(input, { target: { value: 'Renamed 2' } })
+    expect(screen.queryByRole('alert')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('reports non-Error rename failures as text', async () => {
+    const renameSession = vi.fn(async () => { throw 'denied' })
+    section(
+      readyState(),
+      { renameSession },
+      { sessions: [sessionSummary('s1', 5)], workspaces: [hostWorkspace('hw1', 'w1', ['s1'], 'Alpha')] },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Session actions for s1' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
+    fireEvent.change(screen.getByLabelText('Session name'), { target: { value: 'Other' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe('denied') })
+  })
+
+  it('while renaming the dialog locks: input disabled, close blocked, Enter ignored', async () => {
+    let resolveRename!: () => void
+    const renameSession = vi.fn(() => new Promise<void>((resolve) => { resolveRename = resolve }))
+    section(
+      readyState(),
+      { renameSession },
+      { sessions: [sessionSummary('s1', 5)], workspaces: [hostWorkspace('hw1', 'w1', ['s1'], 'Alpha')] },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Session actions for s1' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
+    const input = screen.getByLabelText<HTMLInputElement>('Session name')
+    fireEvent.change(input, { target: { value: 'Busy' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    expect(renameSession).toHaveBeenCalledWith(sid('s1'), 'Busy')
+    expect(input.disabled).toBe(true)
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Cancel' }).disabled).toBe(true)
+    // A second submit through the Enter accelerator is ignored while in flight.
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(renameSession).toHaveBeenCalledTimes(1)
+    // Escape (mask/close) cannot dismiss the dialog while the rename runs.
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    await act(async () => { resolveRename() })
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 
   it('shows the workspace hover card with name, member count, mount path, and created time', () => {

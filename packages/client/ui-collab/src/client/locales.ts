@@ -42,6 +42,15 @@ export const zh = {
   openManager: '管理',
   sessionOpen: '打开会话',
   sessionCount: '{count} 个会话',
+  // Session row verbs (full parity with the browsing region's row menu): the
+  // holder renames the shared title, forks a child from it, or archives it for
+  // every member. Blank placeholders carry no verbs.
+  rename: '重命名',
+  fork: '分叉',
+  archiveSession: '归档会话',
+  sessionActionsAria: '会话“{name}”的操作',
+  renameSessionTitle: '重命名会话',
+  fieldSessionName: '会话名称',
   makeAdmin: '设为管理员',
   makeDeveloper: '设为开发者',
   revoke: '撤销',
@@ -126,6 +135,15 @@ export const en: Record<CollabKey, string> = {
   openManager: 'Manage',
   sessionOpen: 'Open session',
   sessionCount: '{count} sessions',
+  // Session row verbs (full parity with the browsing region's row menu): the
+  // holder renames the shared title, forks a child from it, or archives it for
+  // every member. Blank placeholders carry no verbs.
+  rename: 'Rename',
+  fork: 'Fork',
+  archiveSession: 'Archive session',
+  sessionActionsAria: 'Session actions for {name}',
+  renameSessionTitle: 'Rename session',
+  fieldSessionName: 'Session name',
   makeAdmin: 'Make admin',
   makeDeveloper: 'Make developer',
   revoke: 'Revoke',

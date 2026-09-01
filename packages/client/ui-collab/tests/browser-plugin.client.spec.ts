@@ -91,18 +91,24 @@ async function bench(extraChildren: Record<string, unknown> = {}) {
   // The plugin resolves ctx.connection from the service store.
   ctx.provide('connection', { rpc: { call } } as never)
   // The plugin resolves the runtime Workspace face used to switch into a
-  // mounted collab workspace and to reorder shared collab session accounts.
+  // mounted collab workspace, to reorder shared collab session accounts, and
+  // to archive a collab session for every member.
   const startSession = vi.fn()
   const insertSessionBefore = vi.fn()
+  const archiveSession = vi.fn(async () => { })
   ctx.provide('workspaces', {
     list: { getSnapshot: () => ({ items: [{ workspaceId: 'h1' }] }), subscribe: () => () => {} },
     startSession,
     insertSessionBefore,
+    archiveSession,
   } as never)
-  // The plugin resolves the runtime Session face used to open a session from
-  // the collab section (never reached in these lanes).
-  ctx.provide('sessions', { open: vi.fn() } as never)
-  return { ctx, slots, seen, locale, startSession, insertSessionBefore }
+  // The plugin resolves the runtime Session face used to open a session, to
+  // rename one through its per-session binding, and to fork a child.
+  const openSession = vi.fn()
+  const binding = vi.fn()
+  const fork = vi.fn()
+  ctx.provide('sessions', { open: openSession, binding, fork } as never)
+  return { ctx, slots, seen, locale, startSession, insertSessionBefore, archiveSession, openSession, binding, fork }
 }
 
 /** A bench context without the connection RPC, for the hidden-surface lane. */
@@ -268,6 +274,43 @@ describe('ui-collab client plugin', () => {
     expect(store.getSnapshot().orderBy).toBe('manual')
     face.actions.deleteSelected()
     await vi.waitFor(() => { expect(store.getSnapshot().working).toBe(false) })
+    await fiber.dispose()
+  })
+
+  it('routes session row verbs through the runtime session and workspace faces', async () => {
+    const { ctx, slots, binding, fork, openSession, archiveSession } = await bench()
+    // Rename hops the list binding to the per-session rename verb.
+    const rename = vi.fn<(title: string) => Promise<RpcResult<{ title: string; seq: number }>>>(async () => ({ ok: true as const, value: { title: 'x', seq: 1 } }))
+    binding.mockReturnValue({ session: { rename } })
+    const fiber = ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
+    await new Promise(resolve => setImmediate(resolve))
+    const entry = slots.entries('sidebar.workspaces.collab')[0]!
+    const face = (entry.inject as unknown as () => CollabWorkspacesInjected)()
+    // A bound session renames through its own face.
+    await face.actions.renameSession('s1' as SessionId, 'Research log')
+    expect(binding).toHaveBeenCalledWith('s1')
+    expect(rename).toHaveBeenCalledWith('Research log')
+    // An unbound session rejects so the dialog keeps its error.
+    binding.mockReturnValue(undefined)
+    await expect(face.actions.renameSession('s2' as SessionId, 'x')).rejects.toThrow('unknown session "s2"')
+    // A host-side rename failure propagates its message.
+    rename.mockResolvedValue({ ok: false as const, error: { code: 'internal', message: 'denied', details: {} } })
+    binding.mockReturnValue({ session: { rename } })
+    await expect(face.actions.renameSession('s3' as SessionId, 'x')).rejects.toThrow('denied')
+    // Fork opens the resulting child; a rejected fork keeps the selection.
+    fork.mockResolvedValue('child1')
+    face.actions.forkSession('s1' as SessionId)
+    await vi.waitFor(() => { expect(openSession).toHaveBeenCalledWith('child1') })
+    fork.mockRejectedValue(new Error('nope'))
+    face.actions.forkSession('s1' as SessionId)
+    await vi.waitFor(() => { expect(fork).toHaveBeenCalledTimes(2) })
+    expect(openSession).toHaveBeenCalledTimes(1)
+    // Archive routes to the registry-global archive; rejection propagates.
+    face.actions.archiveSession('s1' as SessionId)
+    await vi.waitFor(() => { expect(archiveSession).toHaveBeenCalledWith('s1') })
+    archiveSession.mockRejectedValue(new Error('denied'))
+    await expect(face.actions.archiveSession('s1' as SessionId)).rejects.toThrow('denied')
     await fiber.dispose()
   })
 

@@ -419,7 +419,9 @@
 }
 
 .projectRow:hover .rowActions,
-.projectRow.menuOpen .rowActions {
+.projectRow.menuOpen .rowActions,
+.sessionRow:hover .rowActions,
+.sessionRow.menuOpen .rowActions {
   display: inline-flex;
 }
 
@@ -601,6 +603,32 @@
   padding: 16px 12px;
   color: var(--dsw-alias-label-tertiary);
   font-size: 13px;
+}
+
+/* Session rename dialog (Modal body): a full-width text input and an inline
+   error line mirroring the browsing region's rename dialog. */
+.renameInput {
+  width: 100%;
+  box-sizing: border-box;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-strong);
+  border-radius: 6px;
+  background: var(--dsw-alias-input-bg, var(--dsw-alias-surface-primary));
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+}
+
+.renameInput:focus {
+  outline: none;
+  border-color: var(--dsw-alias-state-info-primary);
+}
+
+.renameError {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-state-danger-primary);
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -363,6 +363,7 @@ describe('collab/workspace methods', () => {
 
   it('removes a provisioning workspace when the background clone fails', async () => {
     const boot = await bootServices()
+    const warn = vi.spyOn(boot.ctx.logger, 'warn').mockImplementation(() => {})
     boot.cloner.fail('repository not found')
     const created = value(await call(boot, boot.admin, 'collab/workspace.create', {
       name: 'Product',
@@ -371,6 +372,10 @@ describe('collab/workspace methods', () => {
     // The create itself does not fail; the failed clone removes the record.
     expect(created.cloneState).toBe('cloning')
     await vi.waitFor(() => { expect(boot.cloner.calls).toHaveLength(1) })
+    // The operator-facing diagnostic carries the git error the bootstrap hid.
+    await vi.waitFor(() => {
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("collab clone of 'https://github.com/example/missing.git' failed"))
+    })
     await vi.waitFor(async () => {
       const listed = value(await call(boot, boot.admin, 'collab/workspace.list', {})) as CollabWorkspaceView[]
       expect(listed).toEqual([])

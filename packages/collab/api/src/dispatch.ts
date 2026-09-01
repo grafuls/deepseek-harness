@@ -550,7 +550,9 @@ async function createClonedWorkspace(
 /**
  * Run one background repository clone and settle its workspace. A clone
  * failure is an expected outcome that removes the provisioning record, so it
- * is folded into the failed settlement rather than thrown.
+ * is folded into the failed settlement rather than thrown; the failure
+ * diagnostic is logged server-side (the user-facing contract has no failed
+ * state), which is how an operator sees why a bootstrap vanished.
  * @param ctx - the collab API plugin context.
  * @param wsId - the provisioning workspace.
  * @param repoUrl - the validated repository URL to clone.
@@ -571,7 +573,11 @@ async function cloneJob(
   try {
     await cloneRepository(repoUrl, clonePath, runner, credentials, signal)
     outcome = { kind: 'cloned', clonePath }
-  } catch {
+  } catch (error: unknown) {
+    // The git error names the cause (missing git, TLS, credentials, space);
+    // it never carries the credential, which travels as a header, not in the
+    // URL. Logged at warn so a healthy single-user boot stays quiet.
+    ctx.logger.warn(`collab clone of '${repoUrl}' failed: ${String(error)}`)
     outcome = { kind: 'failed' }
   }
   return ctx.collabWorkspaces.settleClone(wsId, outcome)

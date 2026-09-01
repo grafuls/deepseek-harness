@@ -21,6 +21,12 @@
       "path": "../ui-layout"
     },
     {
+      "path": "../ui-primitives"
+    },
+    {
+      "path": "../ui-sidebar"
+    },
+    {
       "path": "../ui-slots"
     },
     {

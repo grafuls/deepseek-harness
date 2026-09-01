@@ -11,13 +11,18 @@ import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 // Type-only: pulls the ui-layout SlotMap augmentation (shell.overlay) into
 // this program; the client bundle emits no request for the layout.
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+// Type-only: pulls the ui-sidebar SlotMap augmentation ('sidebar.footer.action')
+// into this program; the client bundle emits no request for the sidebar.
+import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import type { CollabGateInjected } from './LoginGate.tsx'
 import { LoginGate } from './LoginGate.tsx'
+import type { SignOutControlInjected } from './SignOutControl.tsx'
+import { SignOutControl } from './SignOutControl.tsx'
 import {
-  buildSignInUrl, COLLAB_GATE_INITIAL, probeCollabSession, signInFailure,
+  buildSignInUrl, COLLAB_GATE_INITIAL, probeCollabSession, signInFailure, signOut,
   type CollabGateState,
 } from './contract.ts'
 import { NS, en, zh, type AuthKey } from './locales.ts'
@@ -54,19 +59,41 @@ export function apply(ctx: ClientContext): void {
       ...(failure === undefined ? {} : { signInError: failure }),
     }
   }
+  // Sign-out: clear the server session, then commit the gate to
+  // unauthenticated only once the server accepts (the store flip re-covers the
+  // app with the sign-in overlay; the fence would survive even a refused flip).
+  const signOutAction = (): void => {
+    void signOut().then((accepted) => {
+      if (!accepted) return
+      gate.set({ status: 'unauthenticated', authenticated: false })
+    })
+  }
+  const signOutInjected = (): SignOutControlInjected => ({
+    hooks: { collabGate: gate },
+    signOut: signOutAction,
+  })
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-auth: sign-in gate dictionaries')
   ctx.effect(() => {
     probe()
-    const dispose = ctx.slots.inject('shell.overlay', () => ctx.slots.register({
-      name: 'shell.overlay',
-      id: 'collab-login-gate',
-      locale: NS,
-      inject: injected,
-    }, LoginGate))
-    window.addEventListener('focus', probe)
+    const disposers = [
+      ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+        name: 'shell.overlay',
+        id: 'collab-login-gate',
+        locale: NS,
+        inject: injected,
+      }, LoginGate)),
+      ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
+        name: 'sidebar.footer.action',
+        id: 'collab-sign-out',
+        locale: NS,
+        inject: signOutInjected,
+      }, SignOutControl)),
+    ]
+    const onFocus = (): void => { probe() }
+    window.addEventListener('focus', onFocus)
     return () => {
-      dispose()
-      window.removeEventListener('focus', probe)
+      for (const dispose of disposers) dispose()
+      window.removeEventListener('focus', onFocus)
     }
   }, 'ui-auth: collab sign-in gate')
 }

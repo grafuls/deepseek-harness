@@ -6,19 +6,22 @@ Web GUI 的 collab 登录门。这个浏览器插件探测 collab 会话端点�
 
 登录按钮把浏览器导航到 `/api/collab/auth/login`，门启动浏览器 OIDC 往返，网关带着 `dsh_collab_session` Cookie 跳转回来，之后门在刷新后消失。服务器端拒绝（网关跳转到 `/?collab=<reason>`）会显示在卡片上。
 
+已登录时，插件还会向侧边栏的 `sidebar.footer.action` seat（设置按钮旁的页脚操作）注册一个退出登录行。点击它通过 `/api/collab/auth/logout` 清除服务器会话，网关确认后应用被登录门重新覆盖。
+
 ## 挂载了什么
 
 - Node 半面（`src/index.ts`）：惰性——本包完全位于浏览器侧。
-- 浏览器半面（`src/client/`）：一个 `shell.overlay` 条目，其 inject 面暴露 `collabGate` 存储 hook，外加一个导航到 OIDC 起始 URL 的 `signIn` 回调。探测在挂载时以及窗口重新获得焦点时运行（在另一个标签页登录会让这里的门消失）。
+- 浏览器半面（`src/client/`）：一个 `shell.overlay` 条目，其 inject 面暴露 `collabGate` 存储 hook，外加一个导航到 OIDC 起始 URL 的 `signIn` 回调；以及一个 `sidebar.footer.action` 条目，暴露相同的门 hook 外加一个清除服务器会话的 `signOut` 回调。探测在挂载时以及窗口重新获得焦点时运行（在另一个标签页登录会让这里的门消失）；退出登录行只在已认证时渲染。
 
 ## 线上契约
 
-会话/登录路径字面量位于 `src/client/contract.ts`，并由线路两侧的测试固定：
+会话/登录/退出路径字面量位于 `src/client/contract.ts`，并由线路两侧的测试固定：
 
 | 字面量 | 值 |
 | --- | --- |
 | `COLLAB_SESSION_PATH` | `/api/collab/auth/session` |
 | `COLLAB_SIGN_IN_PATH` | `/api/collab/auth/login` |
+| `COLLAB_LOGOUT_PATH` | `/api/collab/auth/logout` |
 
 探测把所有失败模式（网络错误、非 OK 状态、非 JSON 主体、缺少 `authenticated` 字段）折叠为 `absent`，它渲染为空——为拒绝围栏的非回环主机配置的 collab 绝不会把应用卡在虚构的门后面。
 

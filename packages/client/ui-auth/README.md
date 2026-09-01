@@ -6,19 +6,22 @@ The collab sign-in gate for the Web GUI. This browser plugin probes the collab s
 
 The login button navigates the browser to `/api/collab/auth/login`, the gate starts the browser OIDC round-trip, and the gateway redirects back with a `dsh_collab_session` cookie, after which the gate disappears on the reload. A server-side refusal (the gateway bounces to `/?collab=<reason>`) is shown on the card.
 
+While authenticated, the plugin also registers a sign-out row into the sidebar's `sidebar.footer.action` seat (the footer action beside Settings). Clicking it clears the server session through `/api/collab/auth/logout` and, once the gateway accepts, re-covers the app with the sign-in gate.
+
 ## What it mounts
 
 - Node half (`src/index.ts`): inert — the package is entirely browser-side.
-- Browser half (`src/client/`): a `shell.overlay` entry whose inject face exposes the `collabGate` store hook plus a `signIn` callback that navigates to the OIDC start URL. The probe runs on mount and whenever the window regains focus (a sign-in on another tab clears the gate here).
+- Browser half (`src/client/`): a `shell.overlay` entry whose inject face exposes the `collabGate` store hook plus a `signIn` callback that navigates to the OIDC start URL; and a `sidebar.footer.action` entry exposing the same gate hook plus a `signOut` callback that clears the server session. The probe runs on mount and whenever the window regains focus (a sign-in on another tab clears the gate here); the sign-out row renders only while authenticated.
 
 ## Wire contract
 
-The session/sign-in path literals live in `src/client/contract.ts` and are pinned by tests on both sides of the wire:
+The session/sign-in/logout path literals live in `src/client/contract.ts` and are pinned by tests on both sides of the wire:
 
 | Literal | Value |
 | --- | --- |
 | `COLLAB_SESSION_PATH` | `/api/collab/auth/session` |
 | `COLLAB_SIGN_IN_PATH` | `/api/collab/auth/login` |
+| `COLLAB_LOGOUT_PATH` | `/api/collab/auth/logout` |
 
 The probe folds every failure mode (network error, non-OK status, non-JSON body, missing `authenticated` field) to `absent`, which renders nothing — a collab configured for a non-loopback host that denies the fence never wedges the app behind a fictional gate.
 

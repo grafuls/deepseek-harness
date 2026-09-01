@@ -9,6 +9,7 @@ export const zh = {
   hint: '此实例由 Google 账号授权。登录后可访问协作工作区。',
   signin: '使用 Google 登录',
   signinError: '登录失败：{error}',
+  signOut: '退出登录',
 }
 
 /** English dictionary (same key set). */
@@ -17,6 +18,7 @@ export const en: Record<AuthKey, string> = {
   hint: 'This instance is authorized by Google accounts. Sign in to access collaborative workspaces.',
   signin: 'Sign in with Google',
   signinError: 'Sign-in failed: {error}',
+  signOut: 'Sign out',
 }
 
 /** Union of this namespace's dictionary keys. */

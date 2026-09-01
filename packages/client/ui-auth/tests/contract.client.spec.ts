@@ -5,8 +5,8 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  buildSignInUrl, COLLAB_GATE_INITIAL, COLLAB_SESSION_PATH, COLLAB_SIGN_IN_PATH,
-  probeCollabSession, signInFailure,
+  buildSignInUrl, COLLAB_GATE_INITIAL, COLLAB_LOGOUT_PATH, COLLAB_SESSION_PATH,
+  COLLAB_SIGN_IN_PATH, probeCollabSession, signInFailure, signOut,
 } from '../src/client/contract.ts'
 
 afterEach(() => {
@@ -105,5 +105,26 @@ describe('sign-in URL and failure notice', () => {
     expect(signInFailure('?collab=')).toBe('')
     expect(signInFailure('?ref=1')).toBeUndefined()
     expect(signInFailure('')).toBeUndefined()
+  })
+})
+
+describe('signOut', () => {
+  it('clears the session through the POST logout route and reports the acceptance', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(true, 204, undefined)))
+    await expect(signOut()).resolves.toBe(true)
+    expect(fetch).toHaveBeenCalledWith(COLLAB_LOGOUT_PATH, {
+      method: 'POST',
+      credentials: 'same-origin',
+    })
+  })
+
+  it('reports a non-OK status as a refused logout', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(false, 405, undefined)))
+    await expect(signOut()).resolves.toBe(false)
+  })
+
+  it('reports a network failure as a refused logout without rejecting', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('connection reset') }))
+    await expect(signOut()).resolves.toBe(false)
   })
 })

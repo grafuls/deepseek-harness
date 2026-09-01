@@ -10,9 +10,12 @@ import { Context } from '@deepseek-ai/cordis'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { SlotRegistry } from '@deepseek-ai/dsh-client-runtime/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { COLLAB_LOGOUT_PATH } from '../src/client/contract.ts'
 import { LoginGate, type CollabGateInjected } from '../src/client/LoginGate.tsx'
 import { NS } from '../src/client/locales.ts'
 import { apply, inject } from '../src/client/index.ts'
+import type { SignOutControlInjected } from '../src/client/SignOutControl.tsx'
+import { SignOutControl } from '../src/client/SignOutControl.tsx'
 import { apply as nodeApply } from '../src/index.ts'
 
 const realLocation = window.location
@@ -21,6 +24,18 @@ afterEach(async () => {
   Object.defineProperty(window, 'location', { value: realLocation, configurable: true })
   vi.unstubAllGlobals()
 })
+
+/** A fetch response stub with the two response halves the lanes read. */
+function jsonResponse(ok: boolean, status: number, body: unknown): Response {
+  return {
+    ok,
+    status,
+    json: async () => {
+      if (body === undefined) throw new SyntaxError('no body')
+      return body
+    },
+  } as unknown as Response
+}
 
 async function bench() {
   const ctx = new Context()
@@ -32,7 +47,13 @@ async function bench() {
   ctx.provide('locale', locale)
   const slots = ctx.get('slots') as SlotRegistry
   slots.register(
-    { name: 'root', children: { 'shell.overlay': { kind: 'list', scope: 'root' } } } as never,
+    {
+      name: 'root',
+      children: {
+        'shell.overlay': { kind: 'list', scope: 'root' },
+        'sidebar.footer.action': { kind: 'list', scope: 'root' },
+      },
+    } as never,
     () => null,
   )
   return { ctx, slots, locale }
@@ -68,6 +89,54 @@ describe('ui-auth client plugin', () => {
     expect(entry.component).toBe(LoginGate)
     await fiber.dispose()
     expect(slots.entries('shell.overlay')).toHaveLength(0)
+  })
+
+  it('registers the sign-out footer action beside Settings and tears it down', async () => {
+    const { ctx, slots } = await bench()
+    const fiber = ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
+    expect(slots.entries('sidebar.footer.action')).toHaveLength(1)
+    const entry = slots.entries('sidebar.footer.action')[0]!
+    expect(entry.component).toBe(SignOutControl)
+    expect(entry.locale).toBe(NS)
+    await fiber.dispose()
+    expect(slots.entries('sidebar.footer.action')).toHaveLength(0)
+  })
+
+  it('walks the gate from authenticated to unauthenticated on an accepted logout', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+      if (input === COLLAB_LOGOUT_PATH) return jsonResponse(true, 204, undefined)
+      return jsonResponse(true, 200, { authenticated: true, principal: { name: 'Owen' } })
+    }))
+    const { ctx, slots } = await bench()
+    await ctx.plugin({ inject: [...inject], apply }).await()
+    const entry = slots.entries('sidebar.footer.action')[0]!
+    const face = (entry.inject as unknown as () => SignOutControlInjected)()
+    await new Promise(resolve => setImmediate(resolve))
+    expect(face.hooks.collabGate.getSnapshot()).toEqual({
+      status: 'authenticated', authenticated: true, principalName: 'Owen',
+    })
+    face.signOut()
+    await new Promise(resolve => setImmediate(resolve))
+    expect(face.hooks.collabGate.getSnapshot()).toEqual({ status: 'unauthenticated', authenticated: false })
+  })
+
+  it('keeps the gate authenticated when the server refuses the logout', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+      if (input === COLLAB_LOGOUT_PATH) return jsonResponse(false, 500, undefined)
+      return jsonResponse(true, 200, { authenticated: true, principal: { name: 'Owen' } })
+    }))
+    const { ctx, slots } = await bench()
+    await ctx.plugin({ inject: [...inject], apply }).await()
+    const entry = slots.entries('sidebar.footer.action')[0]!
+    const face = (entry.inject as unknown as () => SignOutControlInjected)()
+    await new Promise(resolve => setImmediate(resolve))
+    expect(face.hooks.collabGate.getSnapshot().authenticated).toBe(true)
+    face.signOut()
+    await new Promise(resolve => setImmediate(resolve))
+    expect(face.hooks.collabGate.getSnapshot()).toEqual({
+      status: 'authenticated', authenticated: true, principalName: 'Owen',
+    })
   })
 
   it('registers bilingual gate dictionaries that ride the standard locale seat', async () => {

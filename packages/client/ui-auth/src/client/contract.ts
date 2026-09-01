@@ -10,6 +10,8 @@
 export const COLLAB_SESSION_PATH = '/api/collab/auth/session'
 /** The gateway's OIDC start route; the browser is redirected here to sign in. */
 export const COLLAB_SIGN_IN_PATH = '/api/collab/auth/login'
+/** The gateway's session-clearing route (POST). */
+export const COLLAB_LOGOUT_PATH = '/api/collab/auth/logout'
 
 /** One of the four gate states the overlay renders from. */
 export type CollabGateStatus = 'checking' | 'authenticated' | 'unauthenticated' | 'absent'
@@ -92,4 +94,23 @@ export function buildSignInUrl(currentLocation: Location): string {
 export function signInFailure(search: string): string | undefined {
   const reason = new URLSearchParams(search).get('collab')
   return reason ?? undefined
+}
+
+/**
+ * Clear the browser's collab session cookie through the gateway's POST logout
+ * route. A non-OK status or a network failure returns false so the caller can
+ * leave the authenticated gate in place — the server fence remains the
+ * authority, and a UI that fails open never claims a session that survived.
+ * @returns whether the server accepted the logout.
+ */
+export async function signOut(): Promise<boolean> {
+  try {
+    const response = await fetch(COLLAB_LOGOUT_PATH, {
+      method: 'POST',
+      credentials: 'same-origin',
+    })
+    return response.ok
+  } catch {
+    return false
+  }
 }

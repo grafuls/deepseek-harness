@@ -8,6 +8,16 @@ import type { IncomingHttpHeaders } from 'node:http'
 import { EventEmitter } from 'node:events'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { stat, writeFile } from 'node:fs/promises'
+import * as fsPromises from 'node:fs/promises'
+// Clone-root writability is checked with `access(W_OK)` at create; the check
+// is mocked to pass by default and reject on demand so unwritable-root
+// behavior is deterministic under any CI user (incl. root, which bypasses
+// permission bits).
+const accessMock = vi.hoisted(() => vi.fn(async () => undefined))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return { ...actual, access: accessMock }
+})
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -461,6 +471,22 @@ describe('collab/workspace methods', () => {
     expect(boot.cloner.calls).toEqual([])
     const listed = value(await call(boot, boot.admin, 'collab/workspace.list', {})) as CollabWorkspaceView[]
     expect(listed).toEqual([])
+  })
+
+  it('answers collab-bad-request when the clone root exists but is not writable', async () => {
+    const boot = await bootServices()
+    const clonesRoot = join(boot.root, 'denied-clones')
+    await fsPromises.mkdir(clonesRoot, { recursive: true })
+    boot.ctx.provide('settings', { get: () => ({ cloneDir: clonesRoot }) } as never)
+    accessMock.mockRejectedValueOnce(Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }))
+    const result = await call(boot, boot.admin, 'collab/workspace.create', {
+      name: 'Product',
+      repoUrl: 'https://github.com/example/product.git',
+    })
+    // An existing-but-unwritable root fails the create loudly instead of
+    // auto-removing the workspace after a permission-denied clone.
+    expectCollabError(result, 'collab-bad-request')
+    expect(boot.cloner.calls).toEqual([])
   })
 
   it('threads the server git credential into a clone of its pinned host', async () => {

@@ -5,7 +5,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { mkdir, rm } from 'node:fs/promises'
+import { access, constants, mkdir, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
@@ -528,11 +528,14 @@ async function createClonedWorkspace(
 ): Promise<WorkspaceRecord> {
   const wsId = makeWorkspaceId(randomUUID())
   // Git creates the leaf target but not its parent: the clone root (default
-  // collab layout or the configured cloneDir) is created on demand. An
-  // unwritable or un-creatable root fails here, at create, with an actionable
-  // fold error rather than after a silent background-removal.
-  await mkdir(cloneRootOf(ctx), { recursive: true })
-  const clonePath = join(cloneRootOf(ctx), cloneDirectoryName(String(wsId), repoUrl))
+  // collab layout or the configured cloneDir) is created on demand. Fail at
+  // create rather than mid-clone: an un-creatable root here, and an existing
+  // but unwritable root (e.g. the wrong owner), would otherwise surface only
+  // as a silent background-removal.
+  const cloneRoot = cloneRootOf(ctx)
+  await mkdir(cloneRoot, { recursive: true })
+  await access(cloneRoot, constants.W_OK)
+  const clonePath = join(cloneRoot, cloneDirectoryName(String(wsId), repoUrl))
   const record = await ctx.collabWorkspaces.create(principal.globalRole, principal.userId, name, {
     id: wsId,
     repoUrl,

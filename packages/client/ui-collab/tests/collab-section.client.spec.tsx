@@ -344,7 +344,7 @@ describe('CollabSection', () => {
       {
         sessions: [sessionSummary('s-blank', 1, { blank: true })],
         workspaces: [hostWorkspace('hw1', 'w1', ['s-blank'], 'Alpha')],
-        current: 's-blank',
+        current: sid('s-blank'),
       },
     )
     expect(screen.getByRole('treeitem', { name: 'New Session' })).toBeTruthy()
@@ -359,7 +359,7 @@ describe('CollabSection', () => {
         workspaces: [hostWorkspace('hw1', 'w1', ['s-blank', 's-kept'], 'Alpha')],
         // The untouched placeholder is not the selected session: like the
         // browsing region it disappears from the workspace row.
-        current: 's-kept',
+        current: sid('s-kept'),
       },
     )
     expect(screen.queryByRole('treeitem', { name: 'New Session' })).toBeNull()
@@ -373,7 +373,7 @@ describe('CollabSection', () => {
       {
         sessions: [sessionSummary('s-blank', 1, { blank: true }), sessionSummary('s-kept', 2)],
         workspaces: [hostWorkspace('hw1', 'w1', ['s-blank', 's-kept'], 'Alpha')],
-        current: 's-blank',
+        current: sid('s-blank'),
       },
     )
     // The selected placeholder keeps its account slot; the real session follows.
@@ -386,7 +386,7 @@ describe('CollabSection', () => {
       {
         sessions: [sessionSummary('s-blank', 1, { blank: true }), sessionSummary('s-kept', 2)],
         workspaces: [hostWorkspace('hw1', 'w1', ['s-blank', 's-kept'], 'Alpha')],
-        current: 's-kept',
+        current: sid('s-kept'),
       },
     )
     expect(screen.queryByRole('treeitem', { name: 'New Session' })).toBeNull()
@@ -484,7 +484,7 @@ describe('CollabSection', () => {
         {
           sessions: [sessionSummary('s1', 5, { running: true, blank: true })],
           workspaces: [hostWorkspace('hw1', 'w1', ['s1'], 'Alpha')],
-          current: 's1',
+          current: sid('s1'),
         },
       )
       const wrapper = screen.getByRole('treeitem', { name: 'New Session' }).parentElement as HTMLElement

@@ -3,7 +3,10 @@
    search, view options, add workspace), and the workspace list scrolls inside
    the same insets so rows align with the session rows above. The local
    browser owns the column's flex seat, so this section must stay bounded: it
-   enters at up to 40% of the column height and scrolls its own rows. */
+   enters at up to 40% of the column height and scrolls its own rows. The rows
+   mirror the browsing region's cell anatomy (figma cell set 14:3080):
+   workspace rows lead with folder chrome that swaps to the expand chevron on
+   hover, session rows lead with a status slot, and hover swaps are pure CSS. */
 
 .root {
   flex: 0 1 auto;
@@ -214,6 +217,7 @@
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
+/* Header action buttons run 28px; the row-action glyphs below are 16px. */
 .iconButton {
   flex: none;
   display: inline-flex;
@@ -299,45 +303,40 @@
   scrollbar-gutter: stable;
 }
 
-.listArea > * + * {
-  margin-top: 2px;
+.list {
+  display: flex;
+  flex-direction: column;
 }
 
-/* One collab workspace row: chevron + folder chrome in the grouped mode, then
-   the name and the member count. Clicking the row toggles its session list —
-   the sessions themselves open on click (the local browser's drill). */
-.row {
+.group {
+  min-width: 0;
+}
+
+.group + .group {
+  margin-top: 4px;
+}
+
+/* Workspace row (mirrors the browsing region's project row): folder chrome,
+   then the title; hover reveals the chevron and the trailing actions. */
+.projectRow {
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
   height: 34px;
-  padding: 0 8px;
   box-sizing: border-box;
-  border: none;
+  padding: 0 8px;
   border-radius: 8px;
-  background: transparent;
   cursor: pointer;
   user-select: none;
   color: var(--dsw-alias-label-primary);
 }
 
-.row:hover {
+.projectRow:hover,
+.projectRow.menuOpen {
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-.chevron {
-  flex: none;
-  width: 12px;
-  height: 20px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--dsw-alias-label-tertiary);
-  transition: transform 140ms var(--ds-ease-in-out);
-}
-
-.folderSlot {
+.slot {
   flex: none;
   width: 16px;
   height: 20px;
@@ -347,13 +346,49 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
-.rowName {
+.folderActive {
+  color: var(--dsw-alias-state-business-primary);
+}
+
+/* Workspace leading slot: folder by default, expand arrow on row hover. */
+.projectRow .chevron {
+  display: none;
+}
+
+.projectRow:hover .chevron {
+  display: inline-flex;
+}
+
+.projectRow:hover .folder {
+  display: none;
+}
+
+/* Chevrons ride the caption grey; the folder glyph stays tertiary. */
+.chevron {
+  color: var(--dsw-alias-label-caption);
+}
+
+.arrow {
+  transition: transform 150ms var(--ds-ease-in-out);
+}
+
+.arrowOpen {
+  transform: rotate(90deg);
+}
+
+.projectText {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-align: left;
   font-size: 14px;
   line-height: 20px;
 }
@@ -367,104 +402,203 @@
   font-size: 12px;
 }
 
-.rowMeta {
+.meta {
   flex: none;
   font-size: 12px;
   line-height: 20px;
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* The session list under an expanded workspace row, indented to sit beneath
-   the workspace name (chevron + folder chrome), so it reads as one group. */
-.group {
-  min-width: 0;
-}
-
-/* Hover actions on the workspace row (mirror the browsing region's rows):
-   an options menu and a New Session button, revealed over the row's start
-   edge. The row itself stays a plain expand button; the actions sit beside
-   it so a click on them never toggles expansion. */
-.rowWrapper {
-  position: relative;
-}
-
+/* Trailing inline actions surface on hover only, exactly like the browsing
+   region's rows; an open row menu pins them. */
 .rowActions {
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
+  flex: none;
+  display: none;
   align-items: center;
-  gap: 2px;
-  box-sizing: border-box;
-  padding: 0 2px;
-  border-radius: 8px;
-  background: var(--dsw-alias-interactive-bg-hover);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 120ms var(--ds-ease-in-out);
+  gap: 12px;
 }
 
-.rowWrapper:hover .rowActions,
-.rowActionsOpen {
-  opacity: 1;
-  pointer-events: auto;
+.projectRow:hover .rowActions,
+.projectRow.menuOpen .rowActions {
+  display: inline-flex;
 }
 
-/* While the actions show, the trailing member count yields the space. */
-.rowWrapper:hover .rowMeta,
-.rowActionsOpen .rowMeta {
-  visibility: hidden;
-}
-
-.rowWrapper:hover .row,
-.rowActionsOpen .row {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-.sessionList {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 0 0 4px;
-  margin-left: 26px;
-  border-left: 1px solid var(--dsw-alias-border-l2);
-  padding-left: 8px;
-}
-
-.sessionRow {
-  display: flex;
+.rowIconButton {
+  flex: none;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  width: 100%;
-  height: 30px;
-  padding: 0 8px;
-  box-sizing: border-box;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
   border: none;
-  border-radius: 8px;
+  border-radius: 4px;
+  padding: 0;
   background: transparent;
   cursor: pointer;
-  user-select: none;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.rowIconButton:hover {
   color: var(--dsw-alias-label-primary);
 }
 
-.sessionRow:hover {
+.rowIconButton:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Session row (figma session cell): pad 8, a 16px status slot, then a 4px
+   title gap; the selected row keeps the hover fill. */
+.sessionRow {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--dsw-alias-label-primary);
+  animation: row-in 150ms var(--ds-ease-in-out);
+}
+
+.sessionRow:hover,
+.sessionRow.selected {
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-.sessionTitle {
+.sessionRow .title {
   flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  margin: 0 6px 0 4px;
+}
+
+.flatSessionRowWithoutStatus .title {
+  margin-left: 0;
+}
+
+@keyframes row-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Session drag insert marker: a leading chevron and 2px rule between rows,
+   absolutely positioned so it neither resembles a row border nor changes layout. */
+.sessionRow.dropBefore,
+.sessionRow.dropAfter {
+  position: relative;
+}
+
+.sessionRow.dropBefore::before,
+.sessionRow.dropAfter::after {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  left: 0;
+  right: 4px;
+  height: 12px;
+  background:
+    linear-gradient(
+      55deg,
+      transparent calc(50% - 1px),
+      var(--dsw-alias-state-business-primary) calc(50% - 1px) calc(50% + 1px),
+      transparent calc(50% + 1px)
+    ) 0 0 / 5px 7px no-repeat,
+    linear-gradient(
+      125deg,
+      transparent calc(50% - 1px),
+      var(--dsw-alias-state-business-primary) calc(50% - 1px) calc(50% + 1px),
+      transparent calc(50% + 1px)
+    ) 0 5px / 5px 7px no-repeat,
+    linear-gradient(
+      var(--dsw-alias-state-business-primary) 0 0
+    ) 4px 5px / calc(100% - 4px) 2px no-repeat;
+  pointer-events: none;
+}
+
+.sessionRow.dropBefore::before {
+  top: -7px;
+}
+
+.sessionRow.dropAfter::after {
+  bottom: -7px;
+}
+
+.time {
+  flex: none;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-tertiary);
   white-space: nowrap;
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Over-one-page session overflow: the browsing region's expand/collapse row. */
+.sessionOverflowButton {
+  width: 100%;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  padding: 0 12px 0 28px;
+  background: transparent;
+  cursor: pointer;
   text-align: left;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.sessionOverflowButton:hover {
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* Hover-card body (same surface as the browsing region's cards). */
+.hoverContent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hoverTitle {
   font-size: 14px;
   line-height: 20px;
+  color: #FFFFFF;
+  overflow-wrap: break-word;
+}
+
+.hoverPath {
+  font-size: 12px;
+  line-height: 16px;
+  color: #CFD3D6;
+  word-break: break-all;
+}
+
+.hoverTime {
+  font-size: 12px;
+  line-height: 16px;
+  color: #CFD3D6;
+}
+
+.hoverStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 20px;
+  color: #ADB2B8;
 }
 
 .empty {
-  padding: 10px 12px;
+  padding: 16px 12px;
   color: var(--dsw-alias-label-tertiary);
   font-size: 13px;
 }
@@ -474,7 +608,10 @@
   .sectionLabel,
   .searchSlot,
   .searchInput,
-  .headerActions {
+  .headerActions,
+  .sessionRow,
+  .arrow {
+    animation: none;
     transition: none;
   }
 }

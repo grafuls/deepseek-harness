@@ -4,24 +4,35 @@
 // add-workspace button that opens the creation dialog), then the member
 // workspaces as rows. Each collab workspace is mounted in the background on
 // render so its shared sessions (including ones other members created) are
-// browsable immediately; a workspace row expands to reveal its sessions, and
-// clicking a session opens it — the same drill as the local section. Pending
-// invitations keep their inline accept rows above the list. It renders
-// nothing while the collab surface is absent, so a single-user web install's
-// browsing region is unchanged.
+// browsable immediately; sessions render inline under each workspace row (the
+// browsing region's drill), and clicking a session opens it. Rows mirror the
+// browsing region's cell anatomy: folder chrome that swaps to the expand
+// chevron on hover, inline hover-revealed row actions, a status slot and
+// relative time on session rows, and hover cards for both. Shared sessions are
+// read-only, so session rows carry no rename/fork/archive actions. Pending
+// invitations keep their inline accept rows above the list. It renders nothing
+// while the collab surface is absent, so a single-user web install's browsing
+// region is unchanged.
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import clsx from 'clsx'
 import {
-  IconChevronDownOutline14, IconChevronRightOutline14, IconCloseFill14,
-  IconEllipsisOutline16, IconFolderOpen16, IconPersonalizationOutline16,
-  IconPlusOutline16, IconProjectAddOutline16, IconSearchOutline16,
-  IconTrashOutline16, Menu, Tooltip,
+  HoverCard, IconCloseFill14, IconEllipsisOutline16, IconFolderClose16,
+  IconFolderOpen16, IconPersonalizationOutline16, IconPlusOutline16,
+  IconProjectAddOutline16, IconSearchOutline16, IconTrashOutline16,
+  IconTriangleRightFill14, Menu, StateDot, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { SessionId, SessionSummary, WorkspaceView } from '@deepseek-ai/dsh-client-runtime/client'
+import type {
+  SessionId, SessionSummary, WorkspaceView,
+} from '@deepseek-ai/dsh-client-runtime/client'
 import type {
   InjectFace, PropsLocale, PropsRuntime,
 } from '@deepseek-ai/dsh-client-ui-slots'
+import {
+  collabSessionStatuses, collabSessionTitle, createdLabel, hoverTimeLabel,
+  timeLabel, type CollabRowTranslate, type CollabSessionStatus,
+} from './collab-rows.ts'
+import { nextCollabSessionOrder } from './collab-order.ts'
 import { CreateWorkspace } from './CreateWorkspace.tsx'
 import type { CollabWorkspaceView } from './contract.ts'
 import type { NS } from './locales.ts'
@@ -34,9 +45,154 @@ export type CollabSectionProps = InjectFace<CollabWorkspacesInjected>
   & PropsLocale<typeof NS>
   & PropsRuntime<'sidebar.workspaces.collab'>
 
+/** Session rows visible per Workspace before the overflow control (mirrors the browsing region). */
+const COLLAPSED_SESSION_LIMIT = 5
+
 /** Keep the controlled search value free of NUL characters (display-only filter). */
 function sanitizeSearchQuery(value: string): string {
   return value.replaceAll('\0', '')
+}
+
+/**
+ * Row drag wiring supplied by the session-row owner, mirroring the browsing
+ * region's row drag contract. `drop` reports the half of the row where the
+ * pointer released so the owner can resolve an insert anchor.
+ */
+export interface CollabRowDragProps {
+  /** Start dragging this row. */
+  start: () => void
+  /** A compatible row drag is in flight. */
+  active: boolean
+  /** Current marker on this row: insert line above, below, or none. */
+  marker: 'before' | 'after' | null
+  /** Report the hovered half while a compatible drag passes over this row. */
+  hover: (half: 'before' | 'after') => void
+  drop: (half: 'before' | 'after') => void
+  end: () => void
+}
+
+/** Pointer-position half of a row (insert line above or below). */
+function rowHalf(e: { clientY: number; currentTarget: HTMLElement }): 'before' | 'after' {
+  const rect = e.currentTarget.getBoundingClientRect()
+  return e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+}
+
+/** In-flight session-row drag: the source workspace plus the current marker. */
+export interface CollabDragState {
+  /** The collab workspace owning the dragged session (its shared order account). */
+  workspaceId: string
+  sessionId: SessionId
+  /** The row the marker sits on and which half (insert above/below it). */
+  over: { id: SessionId; half: 'before' | 'after' } | null
+}
+
+/**
+ * Resolve one session-row drag commit against an ordered account: compute the
+ * insert anchor from the dropped row's half (before = that row, after = the
+ * next account row; a trailing row appends), skip no-op positions, and report
+ * the move to the shared order — anchor omitted appends. Exported so the
+ * anchor math and no-op skips are directly unit-tested; the section binds its
+ * reorder action here.
+ * @param activeDrag - the in-flight drag source.
+ * @param over - the row and half where the pointer released.
+ * @param order - the account's current displayed order.
+ * @param reorder - report one move (session id plus optional anchor).
+ */
+export function commitCollabSessionDrag(
+  activeDrag: CollabDragState,
+  over: NonNullable<CollabDragState['over']>,
+  order: readonly SessionId[],
+  reorder: (sessionId: string, beforeSessionId?: string) => void,
+): void {
+  const targetIndex = order.findIndex(id => id === over.id)
+  if (targetIndex === -1) return
+  const anchor = over.half === 'before' ? over.id : order[targetIndex + 1]
+  if (anchor === activeDrag.sessionId) return
+  const sourceIndex = order.findIndex(id => id === activeDrag.sessionId)
+  const anchorIndex = anchor === undefined ? order.length : order.findIndex(id => id === anchor)
+  if (sourceIndex !== -1 && (anchorIndex === sourceIndex || anchorIndex === sourceIndex + 1)) return
+  const nextOrder = order.filter(id => id !== activeDrag.sessionId)
+  nextOrder.splice(anchor === undefined ? nextOrder.length : nextOrder.indexOf(anchor), 0, activeDrag.sessionId)
+  reorder(activeDrag.sessionId as string, anchor === undefined ? undefined : anchor as string)
+}
+
+/**
+ * Build one session row's drag wiring from the in-flight drag state. Pure over
+ * the visible state (the section passes the current drag state, its setters,
+ * and the drop-committed one-shot), exported so the lifecycle's branches — the
+ * committed-guard, the idle no-op, and the drag-end resolution — are directly
+ * unit-tested, mirroring `handleRowMenuSelect`.
+ * @param sessionDrag - the in-flight drag state, or null when idle.
+ * @param workspaceId - the collab workspace this row belongs to.
+ * @param id - this row's session id.
+ * @param commit - commit the drag at the reported insert marker.
+ * @param next - replace the drag state.
+ * @param dropCommitted - shared one-shot guard so a drop plus its drag-end
+ *   never commits the same move twice.
+ * @returns the row's drag wiring.
+ */
+export function buildRowDragProps(
+  sessionDrag: CollabDragState | null,
+  workspaceId: string,
+  id: SessionId,
+  commit: (activeDrag: CollabDragState, over: NonNullable<CollabDragState['over']>) => void,
+  next: (value: CollabDragState | null) => void,
+  dropCommitted: { current: boolean },
+): CollabRowDragProps {
+  const active = sessionDrag !== null && sessionDrag.workspaceId === workspaceId
+  const start = (): void => {
+    dropCommitted.current = false
+    next({ workspaceId, sessionId: id, over: null })
+  }
+  return {
+    start,
+    active,
+    marker: active && sessionDrag !== null && sessionDrag.over?.id === id ? sessionDrag.over.half : null,
+    hover: (half) => {
+      // Rows gate `hover` on their own `active`, which implies the drag source
+      // below; the null check re-narrows for the always-wired idle build.
+      if (sessionDrag === null) return
+      next({ ...sessionDrag, over: { id, half } })
+    },
+    drop: (half) => {
+      if (sessionDrag === null) return
+      if (dropCommitted.current) return
+      dropCommitted.current = true
+      commit(sessionDrag, { id, half })
+    },
+    end: () => {
+      if (dropCommitted.current) return
+      if (sessionDrag !== null && sessionDrag.over !== null && sessionDrag.over !== undefined) {
+        commit(sessionDrag, sessionDrag.over)
+      } else {
+        next(null)
+      }
+      dropCommitted.current = false
+    },
+  }
+}
+
+/**
+ * Accept the native drag at document level while a row drag is active: row
+ * hover still owns the insertion marker, and releasing outside the list must
+ * not be rendered as a rejected drop before dragend commits that last marker
+ * (the browsing region's same guard).
+ */
+function useNativeDragAcceptance(active: boolean): void {
+  useEffect(() => {
+    if (!active) return
+    const acceptDrag = (event: DragEvent): void => {
+      event.preventDefault()
+      if (event.dataTransfer !== null) event.dataTransfer.dropEffect = 'move'
+    }
+    const acceptDrop = (event: DragEvent): void => { event.preventDefault() }
+    document.addEventListener('dragover', acceptDrag)
+    document.addEventListener('drop', acceptDrop)
+    return () => {
+      document.removeEventListener('dragover', acceptDrag)
+      document.removeEventListener('drop', acceptDrop)
+    }
+  }, [active])
 }
 
 /**
@@ -89,6 +245,235 @@ function CollabViewOptions({ groupBy, orderBy, onGroupPick, onOrderPick, t }: {
           </button>
         </Tooltip>
       )}
+    />
+  )
+}
+
+/** Primary status dot plus every status's screen-reader label, as the browsing region renders. */
+function CollabSessionStatusDots({ statuses }: { statuses: readonly [CollabSessionStatus, ...CollabSessionStatus[]] }) {
+  return (
+    <>
+      <StateDot state={statuses[0].state} />
+      {statuses.map(status => (
+        <span className={css.visuallyHidden} key={status.label}>{status.label}</span>
+      ))}
+    </>
+  )
+}
+
+/** Hover-card body for a collab session row: title, relative time, statuses. */
+function CollabSessionHoverContent({ summary, now, t }: {
+  summary: SessionSummary
+  now: number
+  t: CollabRowTranslate
+}) {
+  const title = collabSessionTitle(summary, t)
+  const statuses = collabSessionStatuses(summary, t)
+  return (
+    <div className={css.hoverContent}>
+      <div className={css.hoverTitle}>{title}</div>
+      {/* Same placeholder rule as the row's trailing cell: no timestamp
+          before the first prompt. */}
+      {!summary.blank && <div className={css.hoverTime}>{hoverTimeLabel(summary.updatedAt, now, t)}</div>}
+      {statuses.map(status => (
+        <div className={css.hoverStatus} key={status.label}>
+          <StateDot state={status.state} />
+          <span>{status.label}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** Hover-card body for a collab workspace row: name, mount path, member count, creation time. */
+function CollabWorkspaceHoverContent({ label, path, count, createdAt, t }: {
+  label: string
+  path: string | undefined
+  count: number
+  createdAt: number
+  t: CollabRowTranslate
+}) {
+  return (
+    <div className={css.hoverContent}>
+      <div className={css.hoverTitle}>{label}</div>
+      {path !== undefined && <div className={css.hoverPath}>{path}</div>}
+      <div className={css.hoverStatus}>{t('memberCount', { count: String(count) })}</div>
+      <div className={css.hoverTime}>{createdLabel(createdAt, t)}</div>
+    </div>
+  )
+}
+
+/**
+ * One collab session row, mirroring the browsing region's session row: a
+ * status slot, the display title, relative time, the selected highlight, and
+ * a hover card. Shared sessions are read-only, so the row carries no
+ * rename/fork/archive actions menu; drag wiring (same-workspace markers only)
+ * is what lets members reorder the shared order.
+ */
+function CollabSessionRow({ summary, current, now, onOpen, drag, flat = false, t }: {
+  summary: SessionSummary
+  current: SessionId | undefined
+  now: number
+  onOpen: (sessionId: SessionId) => void
+  /** The row's drag wiring (every collab session row is draggable). */
+  drag: CollabRowDragProps
+  flat?: boolean
+  t: CollabRowTranslate
+}) {
+  const title = collabSessionTitle(summary, t)
+  const selected = summary.id === current
+  const statuses = collabSessionStatuses(summary, t)
+  const primaryStatus = statuses[0]
+  const showStatus = primaryStatus.state !== 'done' || summary.completed === true
+  const ownRow = (
+    <div
+      className={clsx(
+        css.sessionRow, selected && css.selected,
+        drag.marker === 'before' && css.dropBefore, drag.marker === 'after' && css.dropAfter,
+        flat && !showStatus && css.flatSessionRowWithoutStatus,
+      )}
+      role="treeitem"
+      aria-selected={selected}
+      aria-label={title}
+      onClick={() => { onOpen(summary.id) }}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = 'move'
+        e.dataTransfer.setData('text/plain', summary.id as string)
+        drag.start()
+      }}
+      onDragEnd={drag.end}
+      onDragOver={(e) => {
+        if (!drag.active) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        drag.hover(rowHalf(e))
+      }}
+      onDrop={(e) => {
+        if (!drag.active) return
+        e.preventDefault()
+        drag.drop(rowHalf(e))
+      }}
+    >
+      {(!flat || showStatus) && (
+        <span className={css.slot}>
+          {showStatus && <CollabSessionStatusDots statuses={statuses} />}
+        </span>
+      )}
+      <span className={css.title}>{title}</span>
+      {/* A blank New Session row is a provisional placeholder: nothing has
+          happened in it yet, so no "now" timestamp is shown. */}
+      {!summary.blank && <span className={css.time}>{timeLabel(summary.updatedAt, now, t)}</span>}
+    </div>
+  )
+  return (
+    <HoverCard
+      anchor={ownRow}
+      content={<CollabSessionHoverContent summary={summary} now={now} t={t} />}
+      copyText={summary.blank ? undefined : summary.displayTitle}
+      copyLabel={t('copy')}
+      copiedLabel={t('hoverCopied')}
+    />
+  )
+}
+
+/**
+ * One collab workspace row mirroring the browsing region's project row: folder
+ * chrome that swaps to the expand chevron on hover, the title, the trailing
+ * member count, and hover-revealed inline actions (an options menu and a New
+ * Session button). The row toggles its nested sessions; the action buttons
+ * stop propagation so a click on them never toggles the fold.
+ */
+function CollabWorkspaceRow({ workspace, expanded, active, path, menuOpen, onToggle, onMenuChange, onSelectMenu, onNewSession, t }: {
+  workspace: CollabWorkspaceView
+  expanded: boolean
+  active: boolean
+  path: string | undefined
+  menuOpen: boolean
+  onToggle: () => void
+  onMenuChange: (open: boolean) => void
+  onSelectMenu: (id: string) => void
+  onNewSession: () => void
+  t: CollabRowTranslate
+}) {
+  const workspaceMenuItems = [
+    { id: 'manage', label: t('openManager'), icon: <IconPersonalizationOutline16 /> },
+    { id: 'delete', label: t('deleteWorkspace'), icon: <IconTrashOutline16 />, danger: true },
+  ]
+  const ownRow = (
+    <div
+      className={clsx(css.projectRow, menuOpen && css.menuOpen)}
+      role="treeitem"
+      aria-expanded={expanded}
+      aria-label={workspace.name}
+      onClick={onToggle}
+    >
+      <span className={clsx(css.slot, css.folder, active && css.folderActive)}>
+        {expanded ? <IconFolderOpen16 /> : <IconFolderClose16 />}
+      </span>
+      <span className={clsx(css.slot, css.chevron)}>
+        <IconTriangleRightFill14 className={clsx(css.arrow, expanded && css.arrowOpen)} />
+      </span>
+      <span className={css.projectText}>
+        <span className={css.title}>{workspace.name}</span>
+      </span>
+      {workspace.cloneState === 'cloning' && (
+        <span className={css.cloneBadge}>{t('cloneCloning')}</span>
+      )}
+      <span className={css.meta}>{t('memberCount', { count: String(workspace.memberCount) })}</span>
+      <span className={css.rowActions}>
+        <Menu
+          open={menuOpen}
+          onClose={() => { onMenuChange(false) }}
+          items={workspaceMenuItems}
+          onSelect={(id) => {
+            onMenuChange(false)
+            onSelectMenu(id)
+          }}
+          portal
+          closeOnPointerLeave
+          anchor={(
+            <button
+              type="button"
+              className={css.rowIconButton}
+              aria-label={t('workspaceActionsAria', { name: workspace.name })}
+              onClick={(e) => { e.stopPropagation(); onMenuChange(!menuOpen) }}
+            >
+              <IconEllipsisOutline16 />
+            </button>
+          )}
+        />
+        <button
+          type="button"
+          className={css.rowIconButton}
+          aria-label={t('newSessionAria', { name: workspace.name })}
+          disabled={workspace.cloneState === 'cloning'}
+          // New Session mounts the collab workspace (idempotent when it
+          // already is) and starts a session in it, exactly like the browsing
+          // region's row button — so the click works even before the
+          // background auto-mount echoes the Host record, and a failure
+          // surfaces in the manager banner.
+          onClick={(e) => { e.stopPropagation(); onNewSession() }}
+        >
+          <IconPlusOutline16 />
+        </button>
+      </span>
+    </div>
+  )
+  return (
+    <HoverCard
+      anchor={ownRow}
+      content={<CollabWorkspaceHoverContent
+        label={workspace.name}
+        path={path}
+        count={workspace.memberCount}
+        createdAt={Date.parse(workspace.createdAt)}
+        t={t}
+      />}
+      disabled={menuOpen}
+      copyText={path}
+      copyLabel={t('copy')}
+      copiedLabel={t('hoverCopied')}
     />
   )
 }
@@ -147,18 +532,41 @@ export function CollabSection({
     }
     return byCollabId
   }, [hostWorkspaces])
-  // Component-local viewing state: which collab workspace rows are expanded,
-  // and which row's options menu is open (shown while hovered or expanded).
-  const [expandedWorkspaces, setExpandedWorkspaces] = useState<ReadonlySet<string>>(new Set())
+  // Component-local browsing state: which workspace rows are folded, which
+  // have overflowed their session limit, and which row's options menu is open.
+  const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<ReadonlySet<string>>(new Set())
+  const [expandedOverflow, setExpandedOverflow] = useState<ReadonlySet<string>>(new Set())
   const [menuOpenWorkspaceId, setMenuOpenWorkspaceId] = useState<string | null>(null)
-  const toggleExpansion = (workspaceId: string): void => {
-    setExpandedWorkspaces((current) => {
+  const toggleCollapsed = (workspaceId: string): void => {
+    setCollapsedWorkspaces((current) => {
       const next = new Set(current)
       if (next.has(workspaceId)) next.delete(workspaceId)
       else next.add(workspaceId)
       return next
     })
   }
+  const toggleOverflow = (workspaceId: string): void => {
+    setExpandedOverflow((current) => {
+      const next = new Set(current)
+      if (next.has(workspaceId)) next.delete(workspaceId)
+      else next.add(workspaceId)
+      return next
+    })
+  }
+
+  // Session drag: the per-workspace insert-marker state (source identity plus
+  // the current hover target), mirroring the browsing region's row drag.
+  // Rows only ever receive markers within their own workspace, because collab
+  // order is shared per workspace — a session cannot move between workspaces.
+  const [sessionDrag, setSessionDrag] = useState<CollabDragState | null>(null)
+  const sessionDropCommitted = useRef(false)
+  useNativeDragAcceptance(sessionDrag !== null)
+  // Per-session update times observed since this mount, backing the shared
+  // account's activity-promotion (the browsing region's account discipline).
+  const observedUpdatedAtRef = useRef<Readonly<Record<string, number>>>({})
+  // Drag commit arms are filled below, once the account order cache exists;
+  // declaring the map here keeps the flat and grouped rows sharing one handle.
+  const commitsByWorkspace = new Map<string, (activeDrag: CollabDragState, over: NonNullable<CollabDragState['over']>) => void>()
 
   // Background materialization: mount every collab workspace the runtime does
   // not yet reflect, so its sessions (even ones created by other members) show
@@ -174,9 +582,11 @@ export function CollabSection({
   if (state.availability !== 'ready') return null
 
   // Grouping modes: workspace rows with nested sessions, or one flat session
-  // list. Order mode 'updated' sorts by creation recency for the rows and by
-  // session recency for the sessions; 'manual' keeps the server list order
-  // and, inside a workspace, the Host session account order.
+  // list. Order mode 'updated' sorts by creation recency for the rows; inside
+  // a workspace the shared Host session account is the order base, and
+  // 'updated' promotes sessions whose update advanced since last observed
+  // (the browsing region's discipline, so a member's drag is never undone by
+  // a blind recency sort). 'manual' shows the account order verbatim.
   const orderedWorkspaces = state.orderBy === 'updated'
     ? [...state.workspaces].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     : state.workspaces
@@ -185,42 +595,78 @@ export function CollabSection({
     ? orderedWorkspaces
     : orderedWorkspaces.filter(workspace => workspace.name.toLowerCase().includes(queryLower))
 
-  const sessionIdsOf = (workspace: CollabWorkspaceView): readonly SessionId[] => {
+  // One promotion pass per render: compute every mounted workspace's displayed
+  // order first, so the observation baseline is refreshed exactly once and the
+  // later render reads a stable cache (mirrors the browsing region's effect-
+  // driven account, but in a single synchronous pass).
+  const ordersByWorkspace = new Map<string, readonly SessionId[]>()
+  for (const workspace of state.workspaces) {
     const host = hostByCollabId.get(workspace.id)
-    if (host === undefined) return []
+    if (host === undefined) continue
     // `sessionIds` may lead the list pull, so drop ids the session store has
     // not pulled yet; the rest are guaranteed present below.
-    const ids = host.sessionIds.filter(id => byId[id] !== undefined)
-    if (state.orderBy !== 'updated') return ids
-    return ids
-      .map(id => byId[id] as SessionSummary)
-      .sort((a, b) => b.updatedAt - a.updatedAt)
-      .map(summary => summary.id)
+    const present = host.sessionIds.filter((id): id is SessionId => byId[id] !== undefined)
+    const { order, observedUpdatedAt } = nextCollabSessionOrder(
+      present, byId, observedUpdatedAtRef.current, state.orderBy,
+    )
+    observedUpdatedAtRef.current = observedUpdatedAt
+    // A blank session is the workspace's provisional New Session row and, like
+    // the browsing region, only shows while it is the selected session: moving
+    // to another session hides the untouched placeholder (it stays reusable
+    // for the next New Session). The observed baseline above still counts it,
+    // so a later reactivation does not re-promote.
+    ordersByWorkspace.set(workspace.id, order.filter(id => !byId[id]!.blank || id === sessionsState.current))
+  }
+  const sessionIdsOf = (workspace: CollabWorkspaceView): readonly SessionId[] => {
+    // A workspace without a mount has no order to show (no sessions yet).
+    return ordersByWorkspace.get(workspace.id) ?? []
   }
 
-  // Flat mode rows: every collab session, workspace group then session order,
-  // or newest-first under 'updated'. A session id appears in at most one Host
-  // account, but dedupe defensively against any ledger anomaly.
-  const flatSessions: SessionSummary[] = []
+  // Per-workspace drag commit arms: the account order and mount id captured at
+  // render, in workspace order. A workspace without a mount renders no session
+  // rows and thus no drag arm.
+  for (const workspace of state.workspaces) {
+    const mount = hostByCollabId.get(workspace.id)
+    if (mount === undefined) continue
+    // The mount's workspace entered the order cache above, so the arm's
+    // captured order is present for every draggable row.
+    const order = [...ordersByWorkspace.get(workspace.id)!]
+    commitsByWorkspace.set(workspace.id, (activeDrag, over) => {
+      setSessionDrag(null)
+      // The shared Host account move: the runtime echoes the returned snapshot
+      // immediately and `workspace-changed` reaches every member.
+      commitCollabSessionDrag(activeDrag, over, order, (sessionId, beforeSessionId) => {
+        actions.reorderSession(mount.workspaceId as string, sessionId, beforeSessionId)
+      })
+    })
+  }
+
+  // Flat mode rows: every collab session, in workspace order, each workspace's
+  // sessions under its shared account order. The owner travels with each row so
+  // flat drags stay inside their workspace's account. A session id appears in
+  // at most one Host account, but dedupe defensively against any ledger anomaly.
+  const flatSessions: { summary: SessionSummary; workspaceId: string }[] = []
   const seen = new Set<SessionId>()
   for (const workspace of orderedWorkspaces) {
     for (const id of sessionIdsOf(workspace)) {
       if (seen.has(id)) continue
       seen.add(id)
-      flatSessions.push(byId[id] as SessionSummary)
+      flatSessions.push({ summary: byId[id] as SessionSummary, workspaceId: workspace.id })
     }
   }
-  if (state.groupBy === 'flat' && state.orderBy === 'updated') {
-    flatSessions.sort((a, b) => b.updatedAt - a.updatedAt)
-  }
+
   const visibleFlatSessions = queryLower === ''
     ? flatSessions
-    : flatSessions.filter(session => sessionLabel(session, t).toLowerCase().includes(queryLower))
+    : flatSessions.filter(entry => collabSessionTitle(entry.summary, t).toLowerCase().includes(queryLower))
 
   const showNoMatches = state.workspaces.length > 0 && normalizedQuery !== ''
     && (state.groupBy === 'flat'
       ? visibleFlatSessions.length === 0
       : visibleWorkspaces.length === 0)
+
+  // One shared clock for the relative time cells and hover cards, computed at
+  // render like the browsing region does.
+  const now = Date.now()
 
   return (
     <section className={css.root} aria-label={t('title')}>
@@ -329,112 +775,103 @@ export function CollabSection({
           <div className={css.empty}>{t('searchNoMatches')}</div>
         )}
         {state.groupBy === 'flat'
-          ? visibleFlatSessions.map(session => (
-            <button
-              key={session.id}
-              type="button"
-              className={css.sessionRow}
-              aria-label={t('sessionOpen')}
-              onClick={() => { actions.open(session.id) }}
-            >
-              <span className={css.sessionTitle}>{sessionLabel(session, t)}</span>
-            </button>
-          ))
-          : visibleWorkspaces.map((workspace) => {
-            const expandedState = expandedWorkspaces.has(workspace.id)
-            const sessionIds = sessionIdsOf(workspace)
-            const menuOpen = menuOpenWorkspaceId === workspace.id
-            return (
-              <div key={workspace.id} className={css.group}>
-                <div className={css.rowWrapper}>
-                  <button
-                    type="button"
-                    className={css.row}
-                    aria-expanded={expandedState}
-                    onClick={() => { toggleExpansion(workspace.id) }}
-                  >
-                    <span className={css.chevron} aria-hidden="true">
-                      {expandedState ? <IconChevronDownOutline14 /> : <IconChevronRightOutline14 />}
-                    </span>
-                    <span className={css.folderSlot} aria-hidden="true"><IconFolderOpen16 /></span>
-                    <span className={css.rowName}>{workspace.name}</span>
-                    {workspace.cloneState === 'cloning' && (
-                      <span className={css.cloneBadge}>{t('cloneCloning')}</span>
+          ? (
+            <div className={css.list} role="tree" aria-label={t('title')}>
+              {visibleFlatSessions.map(entry => {
+                // A flat session's owner workspace is mounted by construction
+                // (rows only stem from mounts), so its drag arm always exists.
+                const commitDrag = commitsByWorkspace.get(entry.workspaceId)!
+                return (
+                  <CollabSessionRow
+                    key={entry.summary.id}
+                    summary={entry.summary}
+                    current={sessionsState.current}
+                    now={now}
+                    onOpen={actions.open}
+                    drag={buildRowDragProps(
+                      sessionDrag, entry.workspaceId, entry.summary.id,
+                      commitDrag, setSessionDrag, sessionDropCommitted,
                     )}
-                    <span className={css.rowMeta}>{t('memberCount', { count: String(workspace.memberCount) })}</span>
-                  </button>
-                  {/* Hover actions mirror the browsing region's workspace rows: an
-                      options menu (Manage / Delete) and a New Session button. */}
-                  <span className={clsx(css.rowActions, menuOpen && css.rowActionsOpen)}>
-                    <Menu
-                      open={menuOpen}
-                      onClose={() => { setMenuOpenWorkspaceId(null) }}
-                      items={[
-                        { id: 'manage', label: t('openManager'), icon: <IconPersonalizationOutline16 /> },
-                        { id: 'delete', label: t('deleteWorkspace'), icon: <IconTrashOutline16 />, danger: true },
-                      ]}
-                      onSelect={(id) => {
+                    flat
+                    t={t}
+                  />
+                )
+              })}
+            </div>
+          )
+          : (
+            <div className={css.list} role="tree" aria-label={t('title')}>
+              {visibleWorkspaces.map((workspace) => {
+                const sessionIds = sessionIdsOf(workspace)
+                const collapsed = collapsedWorkspaces.has(workspace.id)
+                const expanded = !collapsed
+                const menuOpen = menuOpenWorkspaceId === workspace.id
+                const mount = hostByCollabId.get(workspace.id)
+                // Session rows (and their drag wiring) require a mounted
+                // workspace; without one the group is just the workspace row.
+                const shownSessions: readonly SessionSummary[] = (mount === undefined
+                  ? []
+                  : (expandedOverflow.has(workspace.id)
+                    ? sessionIds
+                    : sessionIds.slice(0, COLLAPSED_SESSION_LIMIT)))
+                  // `sessionIdsOf` drops ids the session store has not pulled
+                  // yet, so every remaining id resolves below (same cast the
+                  // flat path uses against the same guarantee).
+                  .map(id => byId[id] as SessionSummary)
+                return (
+                  <div key={workspace.id} className={css.group}>
+                    <CollabWorkspaceRow
+                      workspace={workspace}
+                      expanded={expanded}
+                      active={sessionsState.current !== undefined && sessionIds.includes(sessionsState.current)}
+                      path={mount?.path}
+                      menuOpen={menuOpen}
+                      onToggle={() => { toggleCollapsed(workspace.id) }}
+                      onMenuChange={(open) => { setMenuOpenWorkspaceId(open ? workspace.id : null) }}
+                      onSelectMenu={(id) => {
                         setMenuOpenWorkspaceId(null)
                         handleRowMenuSelect(id, workspace.id, actions)
                       }}
-                      portal
-                      closeOnPointerLeave
-                      anchor={(
-                        <button
-                          type="button"
-                          className={css.iconButton}
-                          aria-label={t('workspaceActionsAria', { name: workspace.name })}
-                          onClick={() => { setMenuOpenWorkspaceId(current => current === workspace.id ? null : workspace.id) }}
-                        >
-                          <IconEllipsisOutline16 />
-                        </button>
-                      )}
+                      onNewSession={() => { actions.openWorkspace(workspace.id) }}
+                      t={t}
                     />
-                    <button
-                      type="button"
-                      className={css.iconButton}
-                      aria-label={t('newSessionAria', { name: workspace.name })}
-                      disabled={workspace.cloneState === 'cloning'}
-                      // New Session mounts the collab workspace (idempotent when
-                      // it already is) and starts a session in it, exactly like
-                      // the browsing region's row button — so the click works
-                      // even before the background auto-mount echoes the Host
-                      // record, and a failure surfaces in the manager banner.
-                      onClick={() => { actions.openWorkspace(workspace.id) }}
-                    >
-                      <IconPlusOutline16 />
-                    </button>
-                  </span>
-                </div>
-                {expandedState && (
-                  <div className={css.sessionList}>
-                    {sessionIds
-                      .map(id => byId[id])
-                      .filter((summary): summary is SessionSummary => summary !== undefined)
-                      .map(summary => (
-                        <button
-                          key={summary.id}
-                          type="button"
-                          className={css.sessionRow}
-                          aria-label={t('sessionOpen')}
-                          onClick={() => { actions.open(summary.id) }}
-                        >
-                          <span className={css.sessionTitle}>{sessionLabel(summary, t)}</span>
-                        </button>
-                      ))}
+                    {expanded && shownSessions.map(summary => (
+                      <CollabSessionRow
+                        key={summary.id}
+                        summary={summary}
+                        current={sessionsState.current}
+                        now={now}
+                        onOpen={actions.open}
+                        drag={buildRowDragProps(
+                          sessionDrag, workspace.id, summary.id,
+                          // Session rows only render for a mounted workspace,
+                          // so its drag arm exists (see the guard above).
+                          commitsByWorkspace.get(workspace.id)!,
+                          setSessionDrag, sessionDropCommitted,
+                        )}
+                        t={t}
+                      />
+                    ))}
+                    {expanded && sessionIds.length > COLLAPSED_SESSION_LIMIT && (
+                      <button
+                        type="button"
+                        className={css.sessionOverflowButton}
+                        aria-expanded={expandedOverflow.has(workspace.id)}
+                        onClick={() => { toggleOverflow(workspace.id) }}
+                      >
+                        {expandedOverflow.has(workspace.id)
+                          ? t('sessionsCollapse')
+                          : t('sessionsExpand', { n: sessionIds.length - COLLAPSED_SESSION_LIMIT })}
+                      </button>
+                    )}
                   </div>
-                )}
-              </div>
-            )
-          })}
+                )
+              })}
+            </div>
+          )}
       </div>
     </section>
   )
-}
-
-/** The row label for a collab session: the localized New Session name for blank rows. */
-function sessionLabel(session: SessionSummary, t: CollabSectionProps['t']): string {
-  return session.blank ? t('newSession') : session.displayTitle
 }
 
 /**

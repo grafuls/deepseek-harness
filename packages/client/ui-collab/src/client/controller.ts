@@ -22,6 +22,15 @@ export interface WorkspacePort {
   }
   /** The shared New Session action: connect the target Workspace and open it. */
   startSession(workspaceId?: string): void
+  /**
+   * Move one accounted session within its collab workspace's shared manual
+   * order (the browsing region's workspace-session drag, ported to the Host
+   * account the collab workspaces resolve to).
+   * @param hostWorkspaceId - the Host workspace the collab workspace resolves to.
+   * @param sessionId - the accounted session to move.
+   * @param beforeSessionId - accounted anchor to insert before; omitted appends.
+   */
+  reorderSession(hostWorkspaceId: string, sessionId: string, beforeSessionId?: string): Promise<unknown>
 }
 
 /**
@@ -60,6 +69,26 @@ export class CollabWorkspacesController {
     return this.t('errorUnreachable')
   }
 
+
+  /**
+   * Move one accounted session within its collab workspace's Host account.
+   * The order is shared and server-owned, so this mirrors the browsing
+   * region's workspace drag: the move lands on the Host and the
+   * `workspace-changed` echo reaches every member. A rejected move is a
+   * browsing nicety — the runtime keeps the authoritative order and the next
+   * echo reconciles — so failures are dropped rather than surfaced as a
+   * blocking banner.
+   * @param hostWorkspaceId - the Host workspace the collab workspace resolves to.
+   * @param sessionId - the accounted session to move.
+   * @param beforeSessionId - accounted anchor to insert before; omitted appends.
+   */
+  async reorderSession(hostWorkspaceId: string, sessionId: string, beforeSessionId?: string): Promise<void> {
+    try {
+      await this.workspaces.reorderSession(hostWorkspaceId, sessionId, beforeSessionId)
+    } catch (error) {
+      console.warn('collab session reorder rejected:', error)
+    }
+  }
 
   /**
    * Open the panel and refresh the workspace list and pending invitations, so

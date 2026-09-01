@@ -41,6 +41,7 @@ function actions(): CollabWorkspacesActions {
     setMemberRole: vi.fn(),
     removeMember: vi.fn(),
     deleteSelected: vi.fn(),
+    reorderSession: vi.fn(),
   }
 }
 

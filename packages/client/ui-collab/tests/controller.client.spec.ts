@@ -39,13 +39,13 @@ function zhTranslate(key: string, _params?: Record<string, unknown>): string {
   return zh[key as CollabKey] ?? key
 }
 
-/** One scripted call fake: each endpoint replays its response queue in order. */
 /** A controllable runtime Workspace port: an items list the test can mutate and a startSession spy. */
 function workspacePort(items: Array<{ workspaceId: string }> = []): {
   port: WorkspacePort
   list: Array<{ workspaceId: string }>
   push: (workspaceId: string) => void
   startSession: ReturnType<typeof vi.fn>
+  reorderSession: ReturnType<typeof vi.fn>
 } {
   const list = items
   const listeners = new Set<() => void>()
@@ -54,14 +54,16 @@ function workspacePort(items: Array<{ workspaceId: string }> = []): {
     for (const listener of listeners) listener()
   }
   const startSession = vi.fn()
+  const reorderSession = vi.fn()
   const port = {
     list: {
       getSnapshot: () => ({ items: list }),
       subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } },
     },
     startSession,
+    reorderSession,
   }
-  return { port, list, push, startSession }
+  return { port, list, push, startSession, reorderSession }
 }
 
 function harness(
@@ -74,6 +76,7 @@ function harness(
   seenPayloads: Array<Record<string, unknown>>
   push: (workspaceId: string) => void
   startSession: ReturnType<typeof vi.fn>
+  reorderSession: ReturnType<typeof vi.fn>
 } {
   const seen: string[] = []
   const seenPayloads: Array<Record<string, unknown>> = []
@@ -90,9 +93,9 @@ function harness(
   }
   const api = new CollabApi(call)
   const store = createCollabWorkspacesStore()
-  const { port, push, startSession } = workspacePort(items)
+  const { port, push, startSession, reorderSession } = workspacePort(items)
   const controller = new CollabWorkspacesController(api, store, port, zhTranslate)
-  return { store, controller, seen, seenPayloads, push, startSession }
+  return { store, controller, seen, seenPayloads, push, startSession, reorderSession }
 }
 
 /** Seed a selection so detail paths have a target (store is plain data). */
@@ -624,5 +627,29 @@ describe('CollabWorkspacesController mountAll', () => {
     await controller.mountAll()
     expect(seen.filter(endpoint => endpoint === 'collab/workspace.open')).toEqual(['collab/workspace.open', 'collab/workspace.open'])
     expect(store.getSnapshot().error).toBe('工作区不存在或已被删除')
+  })
+})
+
+describe('CollabWorkspacesController reorderSession', () => {
+  it('moves a session through the runtime port with its anchor', async () => {
+    const { controller, reorderSession } = harness()
+    await controller.reorderSession('h1', 's2', 's4')
+    expect(reorderSession).toHaveBeenCalledExactlyOnceWith('h1', 's2', 's4')
+  })
+
+  it('appends a session when no anchor is given', async () => {
+    const { controller, reorderSession } = harness()
+    await controller.reorderSession('h1', 's2')
+    expect(reorderSession).toHaveBeenCalledExactlyOnceWith('h1', 's2', undefined)
+  })
+
+  it('drops a rejected move without a banner', async () => {
+    const { controller, store, reorderSession } = harness()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    reorderSession.mockRejectedValueOnce(new Error('wire blip'))
+    await expect(controller.reorderSession('h1', 's2', 's4')).resolves.toBeUndefined()
+    expect(warn).toHaveBeenCalledOnce()
+    expect(store.getSnapshot().error).toBeUndefined()
+    warn.mockRestore()
   })
 })

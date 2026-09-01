@@ -10,6 +10,7 @@
 
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type { SettingsScope, SettingsScopeSpec } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SessionId, WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
 // Type-only: pulls the ui-layout and ui-workspace SlotMap augmentations
 // (shell.overlay, sidebar.workspaces.collab) into this program; the client
 // bundle emits no request for either.
@@ -65,7 +66,19 @@ export function apply(ctx: ClientContext): void {
   const api = new CollabApi(connection.rpc.call.bind(connection.rpc))
   const store = createCollabWorkspacesStore()
   const t = ctx.locale.bind(NS)
-  const controller = new CollabWorkspacesController(api, store, ctx.workspaces, t)
+  const controller = new CollabWorkspacesController(api, store, {
+    list: ctx.workspaces.list,
+    startSession: (workspaceId) => { ctx.workspaces.startSession(workspaceId as WorkspaceId | undefined) },
+    // Reordering a collab session is a Host-account move on the same mount
+    // every member resolves to, so the shared runtime Workspace face owns the
+    // wire call and its returned snapshot.
+    reorderSession: (hostWorkspaceId, sessionId, beforeSessionId) =>
+      ctx.workspaces.insertSessionBefore(
+        hostWorkspaceId as WorkspaceId,
+        sessionId as SessionId,
+        beforeSessionId === undefined ? undefined : beforeSessionId as SessionId,
+      ),
+  }, t)
   const injected = (): CollabWorkspacesInjected => ({
     hooks: { collabWorkspaces: store },
     actions: {
@@ -77,6 +90,9 @@ export function apply(ctx: ClientContext): void {
       openWorkspace: (workspaceId) => { void controller.openWorkspace(workspaceId) },
       mountAll: () => { void controller.mountAll() },
       open: (sessionId) => { ctx.sessions.open(sessionId) },
+      reorderSession: (hostWorkspaceId, sessionId, beforeSessionId) => {
+        void controller.reorderSession(hostWorkspaceId, sessionId, beforeSessionId)
+      },
       delete: (workspaceId) => { void controller.delete(workspaceId) },
       setGroupBy: (mode) => { controller.setGroupBy(mode) },
       setOrderBy: (mode) => { controller.setOrderBy(mode) },

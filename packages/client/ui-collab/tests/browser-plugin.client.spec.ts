@@ -24,6 +24,19 @@ import { WorkspacesPanel } from '../src/client/WorkspacesPanel.tsx'
 import { apply, inject } from '../src/client/index.ts'
 import { apply as nodeApply } from '../src/index.ts'
 
+/** The mount record `collab/workspace.open` returns for a host 'h1'. */
+const MOUNTED = {
+  workspace: {
+    workspaceId: 'h1',
+    path: '/data/collab/workspaces/w1',
+    title: 'Alpha',
+    sessionIds: [],
+    createdAt: '2020-01-01T00:00:00.000Z',
+    updatedAt: '2020-01-01T00:00:00.000Z',
+  },
+  dir: '/data/collab/workspaces/w1',
+}
+
 afterEach(() => {
   vi.unstubAllGlobals()
 })
@@ -71,19 +84,25 @@ async function bench(extraChildren: Record<string, unknown> = {}) {
     'collab/workspace.list': [{ ok: true, value: [] }, { ok: true, value: [] }, { ok: true, value: [] }, { ok: true, value: [] }],
     'collab/workspace.myInvitations': [{ ok: true, value: [] }, { ok: true, value: [] }, { ok: true, value: [] }, { ok: true, value: [] }],
     'collab/workspace.delete': [{ ok: true, value: undefined }],
+    // openWorkspace's mount: the Host list already reflects it, so the switch
+    // navigates synchronously and exercises the startSession port wrapper.
+    'collab/workspace.open': [{ ok: true, value: MOUNTED }],
   })
   // The plugin resolves ctx.connection from the service store.
   ctx.provide('connection', { rpc: { call } } as never)
   // The plugin resolves the runtime Workspace face used to switch into a
-  // mounted collab workspace (never reached in these lanes).
+  // mounted collab workspace and to reorder shared collab session accounts.
+  const startSession = vi.fn()
+  const insertSessionBefore = vi.fn()
   ctx.provide('workspaces', {
-    list: { getSnapshot: () => ({ items: [] }), subscribe: () => () => {} },
-    startSession: vi.fn(),
+    list: { getSnapshot: () => ({ items: [{ workspaceId: 'h1' }] }), subscribe: () => () => {} },
+    startSession,
+    insertSessionBefore,
   } as never)
   // The plugin resolves the runtime Session face used to open a session from
   // the collab section (never reached in these lanes).
   ctx.provide('sessions', { open: vi.fn() } as never)
-  return { ctx, slots, seen, locale }
+  return { ctx, slots, seen, locale, startSession, insertSessionBefore }
 }
 
 /** A bench context without the connection RPC, for the hidden-surface lane. */
@@ -193,7 +212,7 @@ describe('ui-collab client plugin', () => {
   })
 
   it('exposes actions that drive the shared store from the inject face', async () => {
-    const { ctx, slots } = await bench()
+    const { ctx, slots, startSession, insertSessionBefore } = await bench()
     const fiber = ctx.plugin({ inject: [...inject], apply })
     await fiber.await()
     await new Promise(resolve => setImmediate(resolve))
@@ -222,7 +241,18 @@ describe('ui-collab client plugin', () => {
     face.actions.acceptInvitation('i1')
     face.actions.setMemberRole('u1', 'admin')
     face.actions.removeMember('u1')
+    // Opening a mounted collab workspace switches the runtime into the shared
+    // Host workspace through the port wrapper.
     face.actions.openWorkspace('w1')
+    await vi.waitFor(() => { expect(startSession).toHaveBeenCalledWith('h1') })
+    // Reordering a collab session routes through the runtime Workspace port,
+    // with and without an anchor (append).
+    face.actions.reorderSession('h1', 's2', 's4')
+    face.actions.reorderSession('h1', 's2')
+    await vi.waitFor(() => {
+      expect(insertSessionBefore).toHaveBeenCalledWith('h1', 's2', 's4')
+      expect(insertSessionBefore).toHaveBeenCalledWith('h1', 's2', undefined)
+    })
     // mountAll materializes collab workspaces in the background (here: none);
     // open routes a session into the runtime Session face.
     const sessions = ctx.get('sessions') as unknown as { open: ReturnType<typeof vi.fn> }

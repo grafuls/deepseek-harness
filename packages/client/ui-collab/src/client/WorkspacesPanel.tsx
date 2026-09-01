@@ -32,6 +32,8 @@ export interface CollabWorkspacesActions {
   mountAll: () => void
   /** Open one mounted collab session in the GUI (browser row click, like the local section). */
   open: (sessionId: SessionId) => void
+  /** Reorder one shared session within its collab workspace's Host account (session row drag). */
+  reorderSession: (hostWorkspaceId: string, sessionId: string, beforeSessionId?: string) => void
   /** Delete a collab workspace from the section row's options menu. */
   delete: (workspaceId: string) => void
   /** Set the collab list grouping mode (view options). */

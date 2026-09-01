@@ -60,6 +60,14 @@ interface Workspace {
   readonly sessionIds: readonly SessionId[]
 
   /**
+   * Collab-origin marker: present exactly when this workspace is a Host mount
+   * of a collaborative workspace, carrying that collab workspace's id. Local
+   * workspaces over arbitrary directories have none. Presence lets browsing
+   * surfaces keep collab mounts out of the local section.
+   */
+  readonly collab: { workspaceId: string } | undefined
+
+  /**
    * Replace the display title durably.
    * @param title - New title; any string, duplicates across workspaces allowed.
    * @returns resolution after durability.
@@ -165,9 +173,12 @@ Durable workspace registry. Startup waits for `sessionPersistence`, builds one c
  * Different canonical paths may share a display title.
  * @param path - Existing directory to own, in any path spelling.
  * @param title - Display title used only when a new record is created.
+ * @param collabWorkspaceId - When the mount belongs to a collaborative
+ *   workspace, its id; the workspace is then marked collab-origin (a
+ *   repeated mount re-stamps an unmarked or recreated record).
  * @returns the existing or newly durable workspace.
  */
-async create(path: string, title?: string): Promise<Workspace>
+async create(path: string, title?: string, collabWorkspaceId?: string): Promise<Workspace>
 
 /**
  * Look up a workspace by id.

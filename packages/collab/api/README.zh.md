@@ -43,11 +43,11 @@ Collab API 网关：一个函数插件，把共享的 harness 进程转变为 Go
 | `collab/users.setGlobalRole` | 提升/降级账号（`admin`/`member`）；仅实例管理员 |
 | `collab/users.setDisabled` | 禁用/启用账号；仅实例管理员 |
 
-错误折叠到封闭的 `RpcError` 代码集：授权拒绝（服务 RBAC）为 `collab-forbidden`，未知 workspace 为 `collab-not-found`，畸形的线上字段或其他服务失败为 `collab-bad-request`，缺少主机服务（组合中没有工作区注册表）为 `collab-internal`，重新断言与另一个主机工作区标题冲突的 collab 名称为 `collab-name-conflict`，仓库后端工作区克隆失败为 `collab-clone-failed`。每个端点在线上边界完成校验，然后委托给所属服务，由服务负责持久化与 RBAC。
+错误折叠到封闭的 `RpcError` 代码集：授权拒绝（服务 RBAC）为 `collab-forbidden`，未知 workspace 为 `collab-not-found`，畸形的线上字段或其他服务失败为 `collab-bad-request`，缺少主机服务（组合中没有工作区注册表）为 `collab-internal`，重新断言与另一个主机工作区标题冲突的 collab 名称为 `collab-name-conflict`，打开或解析克隆尚未完成的仓库后端工作区为 `collab-clone-pending`。每个端点在线上边界完成校验，然后委托给所属服务，由服务负责持久化与 RBAC。
 
 ## 仓库后端的工作区
 
-`collab/workspace.create` 接受 `repoUrl`；省略或传空字符串即创建仅命名的工作区。非空仓库地址会让网关把仓库克隆到本地目录并把克隆结果注册为该工作区的数据，而不是实体化一个全新的空数据目录。克隆目标是 `<cloneRoot>/<repoName>-<workspaceId>`，其中 `<workspaceId>` 是生成的工作区 id，`<repoName>` 是净化成文件系统安全组件后的仓库名（方便管理员一眼认出克隆源自哪个仓库），`<cloneRoot>` 在 `collab` 设置命名空间的 `cloneDir` 被设置时取其值，否则取 collab 数据根下的 `workspaces` 目录。克隆经由 collab 本地的无 shell `git clone` 运行（spawn 时不给子进程 stdin 并设置 `GIT_TERMINAL_PROMPT=0`，因此用户无权访问的仓库会以 git 的 stderr 快速失败，而不是停在凭据提示上等待），超时为十分钟；`collab/workspace.open` 与 `collab/workspace.dir` 对于仓库后端记录解析克隆路径，因此成员共享克隆出的工作树作为所挂载工作区的数据。克隆失败会删除不完整的目标、不注册任何记录，并以 `collab-clone-failed` 应答。访问门通过 collab `workspaceHolding` 关系把克隆目录与数据根目录一视同仁，因此非成员对隐藏克隆下路径的请求会被拒绝。
+`collab/workspace.create` 接受 `repoUrl`；省略或传空字符串即创建仅命名的工作区。非空仓库地址会注册一个置备中的工作区，克隆在后台进行，因此创建请求立即应答——慢速传输永远不会让浏览器请求停在一个跨代理空闲超时上。克隆目标是 `<cloneRoot>/<repoName>-<workspaceId>`，其中 `<workspaceId>` 是生成的工作区 id，`<repoName>` 是净化成文件系统安全组件后的仓库名（方便管理员一眼认出克隆源自哪个仓库），`<cloneRoot>` 在 `collab` 设置命名空间的 `cloneDir` 被设置时取其值，否则取 collab 数据根下的 `workspaces` 目录。克隆进行期间，列表行的 `cloneState` 为 `cloning`；`collab/workspace.open` 与 `collab/workspace.dir` 以 `collab-clone-pending` 拒绝置备中的记录，对已落定的记录（`cloneState` 为 `ready`）则解析克隆路径，因此成员共享克隆出的工作树作为所挂载工作区的数据。克隆经由 collab 本地的无 shell `git clone` 运行（spawn 时不给子进程 stdin 并设置 `GIT_TERMINAL_PROMPT=0`，因此用户无权访问的仓库会以 git 的 stderr 快速失败，而不是停在凭据提示上等待），超时为十分钟，并在 collab 网关拆除时被取消，运行中的克隆绝不被阻塞停机。克隆失败会删除不完整的目标并自动移除置备中的记录，因此失败的仓库初始化不会留下任何东西；因网关在克隆中途重启而残留的置备记录可由创建者删除。访问门通过 collab `workspaceHolding` 关系把克隆目录与数据根目录一视同仁，因此非成员对隐藏克隆下路径的请求会被拒绝。私有仓库只有在操作员配置了服务端 git 凭据（`gitToken` 加 `gitHost`）后才会克隆；该凭据是每实例的秘密，只通过一个宿主作用域、克隆结束后随即删除的 git 配置发送给那个宿主，因此永远不会到达浏览器、工作区记录或克隆自身的配置。
 
 ## Host 平面按成员资格划定作用域
 
@@ -55,7 +55,7 @@ collab 装配体还为 Host 工作区平面挂载了成员资格决策。在每�
 
 ## 配置
 
-本插件的唯一字段是仓库克隆的组合回退：`cloneDir` 为运行时 `collab` 设置命名空间的 `cloneDir` 值（默认仓库克隆目录）播种初始值，启动后该值由用户通过「协作工作区」设置页拥有。其余所有调优都位于其挂载的 collab 服务中（`dsh-collab-*` 根目录、OAuth 客户端、Cookie 策略）。
+本插件组合 collab 服务并负责两项配置：仓库克隆的默认目录（`cloneDir`，为运行时 `collab` 设置命名空间的值播种初始值，启动后该值由用户通过「协作工作区」设置页拥有），以及克隆私有仓库的可选服务端 git 凭据（`gitToken` 加 `gitHost`、`gitUsername`）。该凭据刻意只归操作员所有：它从插件配置读取，经一个临时、宿主作用域、克隆结束后立即删除的 git 配置路由到克隆，绝不通过 GUI 读回的设置命名空间暴露。其余所有调优都位于其挂载的 collab 服务中（`dsh-collab-*` 根目录、OAuth 客户端、Cookie 策略）。
 
 ```yaml
 - id: collab-users
@@ -80,6 +80,12 @@ collab 装配体还为 Host 工作区平面挂载了成员资格决策。在每�
     # before the user overrides it through the settings page. Empty (the
     # default) clones under the collab data root's `workspaces` directory.
     cloneDir: !!js dshHomePath('collab/clones')
+    # Optional: server git credential so private repositories clone. The
+    # token is sent only to `gitHost` (github.com by default) through a
+    # temporary host-scoped git config removed right after the clone.
+    # gitHost: github.com
+    # gitUsername: x-access-token
+    # gitToken: <personal-access-token>
 ```
 
 ## Model Experience

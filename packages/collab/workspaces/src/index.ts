@@ -34,6 +34,7 @@ import type {
   WorkspaceRecord,
   WorkspaceSummary,
 } from './types.ts'
+import type { CloneSettlement, ClonedOutcome, CollabCloneState } from './types.ts'
 
 /** Identifies one collab workspace. */
 export type WorkspaceId = WorkspaceIdBrand
@@ -43,6 +44,9 @@ export type {
   WorkspaceMember,
   WorkspaceRecord,
   WorkspaceSummary,
+  CollabCloneState,
+  CloneSettlement,
+  ClonedOutcome,
 } from './types.ts'
 /** Identifies one invitation into a workspace. */
 export type InvitationId = InvitationIdBrand
@@ -151,6 +155,19 @@ export interface CreateWorkspaceOptions {
   repoUrl?: string
   /** Absolute path of the cloned repository backing the workspace. */
   clonePath?: string
+}
+
+/**
+ * The repository-bootstrap lifecycle of a workspace record.
+ * @param record - the workspace record.
+ * @returns `none` for a name-only workspace, `cloning` while the gateway
+ *   has not yet settled the background clone, `ready` once the clone path is
+ *   recorded.
+ */
+export function cloneStateOf(record: WorkspaceRecord): CollabCloneState {
+  return record.clonePath === undefined
+    ? (record.repoUrl === undefined ? 'none' : 'cloning')
+    : 'ready'
 }
 
 /**
@@ -268,6 +285,7 @@ export class CollabWorkspaces extends Service {
           isOwner: record.ownerId === userId,
           role: member.role,
           createdAt: record.createdAt,
+          cloneState: cloneStateOf(record),
         }
       })
   }
@@ -627,6 +645,49 @@ export class CollabWorkspaces extends Service {
       this.invitations.clear()
       for (const invitation of remaining) this.invitations.set(invitation.id, invitation)
       this.publish()
+    })
+  }
+
+  /**
+   * Settle the background clone of a repository-bootstrapped workspace. The
+   * collab gateway calls this after its async clone finishes: a `cloned`
+   * outcome records the finished clone path, a `failed` outcome removes the
+   * provisioning record (a failed clone leaves no workspace behind, matching
+   * the pre-request removal contract). This is an in-process gateway
+   * operation, never a wire endpoint, so a member cannot assert a clone path
+   * for someone else's workspace.
+   * @param workspaceId - the provisioning workspace.
+   * @param outcome - the finished clone path, or a failed clone.
+   * @returns `added` when the clone path was recorded, `removed` when the
+   *   failed clone removed the provisioning record, and `absent` when the
+   *   record no longer exists (deleted or already settled) — the caller then
+   *   removes the (partial) clone directory.
+   */
+  async settleClone(workspaceId: WorkspaceId, outcome: ClonedOutcome): Promise<CloneSettlement> {
+    return this.enqueue(async () => {
+      const record = this.workspaces.get(workspaceId)
+      if (record === undefined) return 'absent'
+      if (outcome.kind === 'cloned') {
+        if (record.clonePath !== undefined) return 'added'
+        const next: WorkspaceRecord = { ...record, clonePath: outcome.clonePath, updatedAt: now() }
+        await this.persist(
+          [...this.workspaces.values()].map(entry => entry.id === workspaceId ? next : entry),
+          [...this.invitations.values()],
+        )
+        this.workspaces.set(workspaceId, next)
+        this.indexMembership(next)
+        this.publish()
+        return 'added'
+      }
+      if (record.clonePath !== undefined) return 'absent'
+      const remaining = [...this.invitations.values()].filter(invitation => invitation.workspaceId !== workspaceId)
+      await this.persist([...this.workspaces.values()].filter(entry => entry.id !== workspaceId), remaining)
+      this.workspaces.delete(workspaceId)
+      this.membership.delete(workspaceId)
+      this.invitations.clear()
+      for (const invitation of remaining) this.invitations.set(invitation.id, invitation)
+      this.publish()
+      return 'removed'
     })
   }
 

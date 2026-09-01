@@ -16,7 +16,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { collabError } from './errors.ts'
 import { createCollabWorkspaceAccess } from './access-gate.ts'
 import { dispatchCollabEndpoint } from './dispatch.ts'
-import { installCollabSettings } from './settings.ts'
+import { cloneAuthFromConfig, installCollabSettings } from './settings.ts'
 import type { CollabPrincipalView } from './types.ts'
 
 export const name = 'dsh-collab-api'
@@ -29,15 +29,24 @@ export const name = 'dsh-collab-api'
  */
 export const inject = ['webServer', 'connection', 'collabAuth', 'collabUsers', 'collabWorkspaces']
 
-/** Plugin config: the default clone directory for repo-backed workspaces. */
+/** Plugin config: the default clone directory and the optional server git credential for private clones. */
 export interface Config {
   /** Default directory for cloning repositories that back new workspaces; empty uses the collab data root. */
   cloneDir?: string
+  /** Host the git credential authorizes; defaults to `github.com`. */
+  gitHost?: string
+  /** Basic-auth username paired with the token; defaults to `x-access-token` (accepted by GitHub PATs). */
+  gitUsername?: string
+  /** Operator git token (PAT / app password) for cloning private repositories; never shown in the GUI. */
+  gitToken?: string
 }
 
 /** Namespace schema: all optional, an empty clone directory is the schema default. */
 export const Config = z.object({
   cloneDir: z.string().default(''),
+  gitHost: z.string().default(''),
+  gitUsername: z.string().default(''),
+  gitToken: z.string().default(''),
 })
 
 /** Sign-in entry (GET): redirects to the OIDC provider, served as an exact route. */
@@ -51,6 +60,10 @@ export const COLLAB_AUTH_SESSION_PATH = '/api/collab/auth/session'
 export function apply(ctx: Context, config: Config = {}): void {
   // Register the clone-directory settings namespace while a provider is mounted.
   installCollabSettings(ctx, config)
+  // The server git credential for cloning private repositories. Operator
+  // config only: deliberately routed via this service, never through the
+  // collab settings namespace the GUI reads back.
+  ctx.effect(() => ctx.provide('collabGitCloneAuth', cloneAuthFromConfig(config)))
   // Membership gate over the Host plane: collab-rooted workspaces and their
   // sessions are served only to their members. The Host reads it structurally
   // when present, so a single-user composition that omits this overlay never

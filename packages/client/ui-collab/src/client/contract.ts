@@ -30,6 +30,13 @@ export interface CollabRpcResultError {
 /** A collab workspace role. */
 export type CollabRole = 'admin' | 'developer'
 
+/**
+ * Lifecycle of a repository-bootstrapped workspace's clone: `cloning` while
+ * the server clones in the background (the workspace opens once the clone
+ * settles), `ready` once settled, `none` for a name-only workspace.
+ */
+export type CollabCloneState = 'none' | 'cloning' | 'ready'
+
 /** One workspace in the signed-in member's list. */
 export interface CollabWorkspaceView {
   /** Opaque branded workspace id (string on the wire). */
@@ -44,6 +51,8 @@ export interface CollabWorkspaceView {
   role: CollabRole
   /** Creation timestamp (ISO 8601). */
   createdAt: string
+  /** Repository-bootstrap lifecycle (see {@link CollabCloneState}). */
+  cloneState: CollabCloneState
 }
 
 /** One workspace member. */

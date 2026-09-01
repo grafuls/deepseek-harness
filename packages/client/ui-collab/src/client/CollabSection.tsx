@@ -358,6 +358,9 @@ export function CollabSection({
                     </span>
                     <span className={css.folderSlot} aria-hidden="true"><IconFolderOpen16 /></span>
                     <span className={css.rowName}>{workspace.name}</span>
+                    {workspace.cloneState === 'cloning' && (
+                      <span className={css.cloneBadge}>{t('cloneCloning')}</span>
+                    )}
                     <span className={css.rowMeta}>{t('memberCount', { count: String(workspace.memberCount) })}</span>
                   </button>
                   {/* Hover actions mirror the browsing region's workspace rows: an
@@ -391,6 +394,7 @@ export function CollabSection({
                       type="button"
                       className={css.iconButton}
                       aria-label={t('newSessionAria', { name: workspace.name })}
+                      disabled={workspace.cloneState === 'cloning'}
                       // New Session mounts the collab workspace (idempotent when
                       // it already is) and starts a session in it, exactly like
                       // the browsing region's row button — so the click works

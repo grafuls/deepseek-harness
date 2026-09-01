@@ -7,6 +7,7 @@ import type {
   GlobalRole,
   WorkspaceRole,
 } from '@deepseek-ai/dsh-collab-rbac'
+import type { CollabCloneState } from '@deepseek-ai/dsh-collab-workspaces'
 
 /** Client-safe identity of the sign-in caller. */
 export interface CollabPrincipalView {
@@ -36,6 +37,12 @@ export interface CollabWorkspaceView {
   isOwner: boolean
   role: WorkspaceRole
   createdAt: string
+  /**
+   * Lifecycle of the repository bootstrap: `cloning` while the server clones
+   * in the background (the row opens once the clone settles), `ready` once
+   * settled, `none` for a name-only workspace.
+   */
+  cloneState: CollabCloneState
 }
 
 /** Client-safe membership row, enriched from the user registry when present. */

@@ -24,8 +24,8 @@ afterEach(() => {
   cleanup()
 })
 
-const ALPHA: CollabWorkspaceView = { id: 'w1', name: 'Alpha', memberCount: 2, isOwner: true, role: 'admin', createdAt: '2020-01-01T00:00:00.000Z' }
-const BETA: CollabWorkspaceView = { id: 'w2', name: 'Beta', memberCount: 3, isOwner: false, role: 'developer', createdAt: '2021-02-02T00:00:00.000Z' }
+const ALPHA: CollabWorkspaceView = { id: 'w1', name: 'Alpha', memberCount: 2, isOwner: true, role: 'admin', createdAt: '2020-01-01T00:00:00.000Z', cloneState: 'ready' }
+const BETA: CollabWorkspaceView = { id: 'w2', name: 'Beta', memberCount: 3, isOwner: false, role: 'developer', createdAt: '2021-02-02T00:00:00.000Z', cloneState: 'ready' }
 const INVITATION: CollabMyInvitationView = { id: 'i1', workspaceId: 'w3', workspaceName: 'Gamma', role: 'developer', createdAt: '2020-01-01T00:00:00.000Z' }
 
 const sid = (id: string) => id as SessionId
@@ -234,6 +234,13 @@ describe('CollabSection', () => {
     // The row itself still expands; the hover button did not steal the click.
     fireEvent.click(screen.getByText('Alpha'))
     expect(screen.getByText('s1')).toBeTruthy()
+  })
+
+  it('tags a cloning workspace and disables new sessions until it settles', () => {
+    section(readyState({ workspaces: [{ ...ALPHA, cloneState: 'cloning' }] }))
+    expect(screen.getByText('Cloning…')).toBeTruthy()
+    const button = screen.getByRole('button', { name: 'New session in Alpha' }) as HTMLButtonElement
+    expect(button.disabled).toBe(true)
   })
 
   it('starts a session from the row button even before the workspace is mounted', () => {

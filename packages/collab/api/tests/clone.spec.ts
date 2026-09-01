@@ -1,5 +1,5 @@
 /**
- * cloneRepository and cloneFailureMessage: the no-shell git clone runner's
+ * cloneRepository and the no-shell git clone runner: the
  * success, failure-cleanup, and diagnostic-folding behavior, against an
  * injected fake command runner so no network is involved. The production
  * runner the dispatch uses (`gitCloneRunner`) is additionally probed with a
@@ -7,12 +7,18 @@
  * failure — never a credential prompt, which the runner is hardened against.
  */
 import { spawnSync } from 'node:child_process'
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { NativeCommandRunner } from '@deepseek-ai/dsh-native-command'
-import { CLONE_REPO_PREFIX_MAX, cloneDirectoryName, cloneFailureMessage, cloneRepository, gitCloneRunner } from '../src/clone.ts'
+import {
+  CLONE_REPO_PREFIX_MAX,
+  cloneDirectoryName,
+  cloneRepository,
+  gitCloneRunner,
+  repoHostOf,
+} from '../src/clone.ts'
 
 let root: string | undefined
 
@@ -46,8 +52,7 @@ async function makeSourceRepo(): Promise<string> {
 }
 
 describe('cloneRepository', () => {
-  it('runs `git clone` into the target and leaves a pre-existing target alone on success', async () => {
-    root = await mkdtemp(join(tmpdir(), 'dsh-collab-clone-'))
+  it('runs `git clone` into the target and leaves a pre-existing target alone on success', async () => {    root = await mkdtemp(join(tmpdir(), 'dsh-collab-clone-'))
     const target = join(root, 'repo')
     await mkdir(target, { recursive: true })
     const runner = vi.fn<NativeCommandRunner>(async () => ({ stdout: '', stderr: '' }))
@@ -56,6 +61,7 @@ describe('cloneRepository', () => {
       'git',
       ['clone', 'https://github.com/example/product.git', target],
       expect.any(AbortSignal),
+      undefined,
     )
     expect((await stat(target)).isDirectory()).toBe(true)
   })
@@ -87,6 +93,87 @@ describe('cloneRepository', () => {
   })
 })
 
+describe('cloneRepository credentials', () => {
+  it('passes a host-scoped Authorization config through env for a matching host and cleans it', async () => {
+    root = await mkdtemp(join(tmpdir(), 'dsh-collab-clone-'))
+    const target = join(root, 'repo')
+    const contents: string[] = []
+    let configPath: string | undefined
+    const runner = async (
+      _command: string,
+      _args: readonly string[],
+      _signal: AbortSignal,
+      env?: NodeJS.ProcessEnv,
+    ): Promise<{ stdout: string; stderr: string }> => {
+      configPath = env?.GIT_CONFIG_GLOBAL
+      contents.push(await readFile(configPath!, 'utf8'))
+      return { stdout: '', stderr: '' }
+    }
+    await cloneRepository('https://github.com/grafuls/private.git', target, runner, {
+      host: 'github.com',
+      username: 'x-access-token',
+      token: 'ghp_secret',
+    })
+    expect(configPath).toContain('dsh-collab-git-')
+    const basic = Buffer.from('x-access-token:ghp_secret', 'utf8').toString('base64')
+    expect(contents[0]).toContain('[http "https://github.com/"]')
+    expect(contents[0]).toContain(`extraheader = AUTHORIZATION: basic ${basic}`)
+    // The temporary credential directory never outlives the clone.
+    await expect(stat(configPath!)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('clones without credentials on a host mismatch or when none are configured', async () => {
+    root = await mkdtemp(join(tmpdir(), 'dsh-collab-clone-'))
+    const target = join(root, 'repo')
+    const envs: Array<NodeJS.ProcessEnv | undefined> = []
+    const runner = async (
+      _command: string,
+      _args: readonly string[],
+      _signal: AbortSignal,
+      env?: NodeJS.ProcessEnv,
+    ): Promise<{ stdout: string; stderr: string }> => {
+      envs.push(env)
+      return { stdout: '', stderr: '' }
+    }
+    const githubCredential = { host: 'github.com', username: 'x-access-token', token: 'ghp_secret' }
+    await cloneRepository('https://gitlab.com/example/other.git', target, runner, githubCredential)
+    expect(envs[0]).toBeUndefined()
+    await cloneRepository('https://github.com/example/public.git', target, runner)
+    expect(envs[1]).toBeUndefined()
+  })
+
+  it('cleans the temporary credential config when the clone fails', async () => {
+    root = await mkdtemp(join(tmpdir(), 'dsh-collab-clone-'))
+    const target = join(root, 'repo')
+    let configPath: string | undefined
+    const runner = async (
+      _command: string,
+      _args: readonly string[],
+      _signal: AbortSignal,
+      env?: NodeJS.ProcessEnv,
+    ): Promise<{ stdout: string; stderr: string }> => {
+      configPath = env?.GIT_CONFIG_GLOBAL
+      throw Object.assign(new Error('git: denied'), { stderr: 'fatal: could not read Username' })
+    }
+    await expect(cloneRepository('https://github.com/grafuls/private.git', target, runner, {
+      host: 'github.com',
+      username: 'x-access-token',
+      token: 'ghp_secret',
+    })).rejects.toThrow()
+    await expect(stat(configPath!)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(stat(target)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+})
+
+describe('repoHostOf', () => {
+  it('resolves the HTTPS host and ignores non-HTTPS or unparsable URLs', () => {
+    expect(repoHostOf('https://github.com/grafuls/deepseek-harness.git')).toBe('github.com')
+    expect(repoHostOf('git@github.com:grafuls/deepseek-harness.git')).toBe('')
+    expect(repoHostOf('ssh://git@github.com/grafuls/deepseek-harness')).toBe('')
+    expect(repoHostOf('file:///tmp/repo')).toBe('')
+  })
+})
+
 describe('gitCloneRunner', () => {
   it('captures stdout and resolves on a zero exit', async () => {
     const { stdout } = await gitCloneRunner('echo', ['hello'], AbortSignal.timeout(5_000))
@@ -103,21 +190,6 @@ describe('gitCloneRunner', () => {
     await expect(
       gitCloneRunner(process.execPath, ['-e', 'process.kill(process.pid, "SIGKILL")'], AbortSignal.timeout(5_000)),
     ).rejects.toThrow(/git clone exited with code a signal/)
-  })
-})
-
-describe('cloneFailureMessage', () => {
-  it('prefers the process stderr and trims it', () => {
-    expect(cloneFailureMessage('https://github.com/example/no.git', {
-      stderr: '  fatal: could not read Username  ',
-    })).toBe("failed to clone 'https://github.com/example/no.git': fatal: could not read Username")
-  })
-
-  it('falls back to the error message and then to a generic line', () => {
-    expect(cloneFailureMessage('https://github.com/example/no.git', new Error('boom')))
-      .toBe("failed to clone 'https://github.com/example/no.git': boom")
-    expect(cloneFailureMessage('https://github.com/example/no.git', { stderr: 42 }))
-      .toBe("failed to clone 'https://github.com/example/no.git': git clone failed")
   })
 })
 

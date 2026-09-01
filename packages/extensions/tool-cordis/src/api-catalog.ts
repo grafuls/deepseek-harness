@@ -694,6 +694,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the member\'s workspace role, or undefined when not a member.',
       },
       {
+        signature: 'workspaceHolding(path: string): WorkspaceId | undefined',
+        description: 'The workspace whose cloned repository directory contains `path`, if any. The collab membership gate uses this to scope the Host plane: a session working directory or workspace path beneath a recorded clone directory resolves to its workspace, so the gate can decide membership instead of treating the clone as an unowned Host path. The comparison uses the real path of each recorded clone directory so Host-plane canonical paths match.',
+        parameters: [{ name: 'path', description: 'a Host-plane workspace directory or session working directory.' }],
+        returns: 'the workspace id owning the containing clone, or undefined.',
+      },
+      {
         signature: 'memberOf(workspaceId: WorkspaceId, userId: UserId): WorkspaceMember | undefined',
         description: 'Synchronous per-member lookup.',
         parameters: [{ name: 'workspaceId', description: 'the workspace to inspect.' }, { name: 'userId', description: 'the member to find.' }],
@@ -706,9 +712,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the client-safe summary per membership.',
       },
       {
-        signature: 'async create(actorGlobalRole: GlobalRole, actorId: UserId, name: string): Promise<WorkspaceRecord>',
-        description: 'Create a workspace. Any authenticated user may create one; the creator becomes the owner and its first `admin` member.',
-        parameters: [{ name: 'actorGlobalRole', description: 'the acting user\'s global role (needs `workspace.create`).' }, { name: 'actorId', description: 'the creating user.' }, { name: 'name', description: 'display name (trimmed; must not be empty).' }],
+        signature: 'async create( actorGlobalRole: GlobalRole, actorId: UserId, name: string, options: CreateWorkspaceOptions = {}, ): Promise<WorkspaceRecord>',
+        description: 'Create a workspace. Any authenticated user may create one; the creator becomes the owner and its first `admin` member. Repository-bootstrap options record a clone the caller already produced (see CreateWorkspaceOptions), so the record and its backing directory commit atomically or not at all.',
+        parameters: [{ name: 'actorGlobalRole', description: 'the acting user\'s global role (needs `workspace.create`).' }, { name: 'actorId', description: 'the creating user.' }, { name: 'name', description: 'display name (trimmed; must not be empty).' }, { name: 'options', description: 'optional repository-bootstrap facts and an explicit id.' }],
         returns: 'the new workspace.',
       },
       {
@@ -774,6 +780,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         signature: 'async delete(actorWorkspaceRole: WorkspaceRole, workspaceId: WorkspaceId): Promise<void>',
         description: 'Delete a workspace and every invitation into it.',
         parameters: [{ name: 'actorWorkspaceRole', description: 'the acting workspace role (needs `workspace.delete`).' }, { name: 'workspaceId', description: 'the workspace.' }],
+      },
+      {
+        signature: 'async settleClone(workspaceId: WorkspaceId, outcome: ClonedOutcome): Promise<CloneSettlement>',
+        description: 'Settle the background clone of a repository-bootstrapped workspace. The collab gateway calls this after its async clone finishes: a `cloned` outcome records the finished clone path, a `failed` outcome removes the provisioning record (a failed clone leaves no workspace behind, matching the pre-request removal contract). This is an in-process gateway operation, never a wire endpoint, so a member cannot assert a clone path for someone else\'s workspace.',
+        parameters: [{ name: 'workspaceId', description: 'the provisioning workspace.' }, { name: 'outcome', description: 'the finished clone path, or a failed clone.' }],
+        returns: '`added` when the clone path was recorded, `removed` when the failed clone removed the provisioning record, and `absent` when the record no longer exists (deleted or already settled) — the caller then removes the (partial) clone directory.',
       },
     ],
   },
@@ -2561,9 +2573,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     description: 'Durable workspace registry. Startup waits for `sessionPersistence`, builds one canonical-cwd header index, and completes the one-time history bootstrap before the service becomes active. The persistence dependency is mandatory so an unavailable peer can never be mistaken for an empty history and commit the initialized marker.',
     methods: [
       {
-        signature: 'async create(path: string, title?: string): Promise<Workspace>',
+        signature: 'async create(path: string, title?: string, collabWorkspaceId?: string): Promise<Workspace>',
         description: 'Create or reuse a workspace for an existing directory. The path is canonicalized through `fs.realpath`; a nonexistent path rejects with the original error and a non-directory rejects. Repeated calls for the same canonical path return the existing entity without changing its title. A newly created workspace is prepended to the durable registry order. Different canonical paths may share a display title.',
-        parameters: [{ name: 'path', description: 'Existing directory to own, in any path spelling.' }, { name: 'title', description: 'Display title used only when a new record is created.' }],
+        parameters: [{ name: 'path', description: 'Existing directory to own, in any path spelling.' }, { name: 'title', description: 'Display title used only when a new record is created.' }, { name: 'collabWorkspaceId', description: 'When the mount belongs to a collaborative workspace, its id; the workspace is then marked collab-origin (a repeated mount re-stamps an unmarked or recreated record).' }],
         returns: 'the existing or newly durable workspace.',
       },
       {
@@ -3285,6 +3297,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ClientResponse {\n    type: \'client-response\';\n    rpcId: RpcId;\n    result: RpcResult<unknown>;\n}',
   },
   {
+    name: 'ClonedOutcome',
+    declaration: 'export type ClonedOutcome = {\n    readonly kind: \'cloned\';\n    readonly clonePath: string;\n} | {\n    readonly kind: \'failed\';\n};',
+  },
+  {
+    name: 'CloneSettlement',
+    declaration: 'export type CloneSettlement = \'added\' | \'removed\' | \'absent\';',
+  },
+  {
     name: 'CodeBindingErrorClass',
     declaration: 'export interface CodeBindingErrorClass {\n    name: string;\n    memberNameProperty: string;\n}',
   },
@@ -3463,6 +3483,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'CreateTeamTaskRequest',
     declaration: 'export interface CreateTeamTaskRequest {\n    readonly subject: string;\n    readonly description: string;\n    readonly blockedBy?: readonly TeamTaskId[];\n    readonly writeScopes?: readonly string[];\n}',
+  },
+  {
+    name: 'CreateWorkspaceOptions',
+    declaration: 'export interface CreateWorkspaceOptions {\n    id?: WorkspaceId;\n    repoUrl?: string;\n    clonePath?: string;\n}',
   },
   {
     name: 'CredentialInfo',
@@ -5374,7 +5398,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'WorkspaceSummary',
-    declaration: 'export interface WorkspaceSummary {\n    id: WorkspaceId;\n    name: string;\n    memberCount: number;\n    isOwner: boolean;\n    role: WorkspaceRole;\n    createdAt: string;\n}',
+    declaration: 'export interface WorkspaceSummary {\n    id: WorkspaceId;\n    name: string;\n    memberCount: number;\n    isOwner: boolean;\n    role: WorkspaceRole;\n    createdAt: string;\n    cloneState: CollabCloneState;\n}',
   },
 ]
 

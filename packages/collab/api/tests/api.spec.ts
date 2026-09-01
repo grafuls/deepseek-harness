@@ -7,6 +7,7 @@
 import type { IncomingHttpHeaders } from 'node:http'
 import { EventEmitter } from 'node:events'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -14,12 +15,12 @@ import { UserId } from '@deepseek-ai/dsh-collab-users'
 import { CollabAuth, type OidcGateway } from '@deepseek-ai/dsh-collab-auth'
 import { CollabUsers } from '@deepseek-ai/dsh-collab-users'
 import { CollabWorkspaces, WorkspaceId } from '@deepseek-ai/dsh-collab-workspaces'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createCollabWorkspaceAccess } from '../src/access-gate.ts'
 import { apply, COLLAB_AUTH_LOGIN_PATH, COLLAB_AUTH_LOGOUT_PATH, COLLAB_AUTH_SESSION_PATH } from '../src/index.ts'
 import { dispatchCollabEndpoint, workspaceDataDir } from '../src/dispatch.ts'
 import { collabError } from '../src/errors.ts'
-import type { NativeCommandRunner } from '@deepseek-ai/dsh-native-command'
+import type { GitCloneCredentials } from '../src/clone.ts'
 import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { CollabMountedWorkspaceView, CollabWorkspaceView } from '../src/types.ts'
 
@@ -54,11 +55,22 @@ interface Booted {
 
 /** A controllable stand-in for the `git clone` runner the dispatch reads. */
 interface ClonerHarness {
-  runner: NativeCommandRunner
+  runner: (
+    command: string,
+    args: readonly string[],
+    signal: AbortSignal,
+    env?: NodeJS.ProcessEnv,
+  ) => Promise<{ stdout: string; stderr: string }>
   /** Recorded `git clone` shorthand calls as { repoUrl, target }. */
   calls: Array<{ repoUrl: string; target: string }>
+  /** Recorded env each clone ran with, undefined when no credential plumbing was attached. */
+  envs: Array<NodeJS.ProcessEnv | undefined>
   /** Make the next clone fail with a git-style stderr. */
   fail: (message?: string) => void
+  /** Hold the next clone open (a provisioning window) until {@link release}. */
+  stall: () => void
+  /** Release a held clone so its background job can settle. */
+  release: () => void
 }
 
 const boots: Booted[] = []
@@ -71,15 +83,31 @@ afterEach(async () => {
 })
 
 /**
- * A fake `git clone` runner: records the target, succeeds by default, and
- * rejects on demand, so creating a repo-backed workspace never touches the
- * network.
+ * A fake `git clone` runner: records the target, succeeds by default, rejects
+ * (or stalls) on demand, so creating a repo-backed workspace never touches
+ * the network.
  */
 function fakeCloner(): ClonerHarness {
   const calls: Array<{ repoUrl: string; target: string }> = []
+  const envs: Array<NodeJS.ProcessEnv | undefined> = []
   let failing: string | undefined
-  const runner: NativeCommandRunner = async (_command, args, _signal) => {
+  let stalled: Promise<void> | undefined
+  let releaseStall: (() => void) | undefined
+  const runner = async (_command: string, args: readonly string[], signal: AbortSignal, env?: NodeJS.ProcessEnv) => {
     calls.push({ repoUrl: args[1]!, target: args[2]! })
+    envs.push(env)
+    const gate = stalled
+    if (gate !== undefined) {
+      // A held clone yields to the job's cancellation (the collab gateway
+      // disposes mid-clone), so teardown never waits on a stalled runner.
+      await Promise.race([
+        gate,
+        new Promise<void>((resolve) => {
+          if (signal.aborted) { resolve(); return }
+          signal.addEventListener('abort', () => { resolve() }, { once: true })
+        }),
+      ])
+    }
     if (failing !== undefined) {
       throw Object.assign(new Error(`git: ${failing}`), { stderr: `fatal: ${failing}` })
     }
@@ -88,7 +116,14 @@ function fakeCloner(): ClonerHarness {
   return {
     runner,
     calls,
+    envs,
     fail: (message = 'repository not found') => { failing = message },
+    stall: () => { stalled = new Promise<void>((resolve) => { releaseStall = resolve }) },
+    release: () => {
+      releaseStall?.()
+      stalled = undefined
+      releaseStall = undefined
+    },
   }
 }
 
@@ -176,6 +211,28 @@ function flush(): Promise<void> {
   return new Promise<void>(resolve => setImmediate(resolve))
 }
 
+/**
+ * Await a repo-backed workspace's background clone settling to `ready`, then
+ * return its list row. The create endpoint returns a provisioning record
+ * immediately; the fake cloner and the settle that follows resolve on later
+ * microtasks, so the readiness probe polls the list until the row flips.
+ * @param boot - the booted collab surface.
+ * @param expectedTarget - the clone target the background job must have seen.
+ * @returns the settled workspace row.
+ */
+async function settleCloneToReady(boot: Booted, expectedTarget: string): Promise<CollabWorkspaceView> {
+  await vi.waitFor(() => {
+    expect(boot.cloner.calls.some(entry => entry.target === expectedTarget)).toBe(true)
+  })
+  let row: CollabWorkspaceView | undefined
+  await vi.waitFor(async () => {
+    const listed = value(await call(boot, boot.admin, 'collab/workspace.list', {})) as CollabWorkspaceView[]
+    row = listed.find(entry => entry.cloneState === 'ready')
+    expect(row?.cloneState).toBe('ready')
+  })
+  return row!
+}
+
 /** A fake Host workspace registry: one record created over a given dir plus optional titled lookalikes. */
 function fakeWorkspaceRegistry(dir: string): {
   register: (ctx: Context) => void
@@ -243,10 +300,11 @@ describe('collab/workspace methods', () => {
   it('creates a workspace as owner/admin and lists it', async () => {
     const boot = await bootServices()
     const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: ' Visual  Lab ' }))
-    expect(created).toMatchObject({ isOwner: true, role: 'admin', memberCount: 1 })
+    expect(created).toMatchObject({ isOwner: true, role: 'admin', memberCount: 1, cloneState: 'none' })
     const listed = value(await call(boot, boot.admin, 'collab/workspace.list', {})) as CollabWorkspaceView[]
     expect(listed).toHaveLength(1)
     expect(listed[0]!.name).toBe('Visual  Lab')
+    expect(listed[0]!.cloneState).toBe('none')
     const nonMember = value(await call(boot, boot.member, 'collab/workspace.list', {}))
     expect(nonMember).toEqual([])
   })
@@ -259,15 +317,19 @@ describe('collab/workspace methods', () => {
     expectCollabError(nonString, 'collab-bad-request')
   })
 
-  it('clones a repository into a per-workspace directory and records it', async () => {
+  it('creates a provisioning workspace from a repository URL and settles it ready', async () => {
     const boot = await bootServices()
     const created = value(await call(boot, boot.admin, 'collab/workspace.create', {
       name: 'Product',
       repoUrl: ' https://github.com/example/product.git ',
     })) as CollabWorkspaceView
-    // The clone landed under the default clone root, prefixed with the repo name.
+    // The create answers immediately with a provisioning record; the browser
+    // request never stays open across the clone. The background clone still
+    // starts eagerly (the settle to `ready` below proves it).
+    expect(created.cloneState).toBe('cloning')
     const clonePath = join(boot.ctx.collabWorkspaces.root, 'workspaces', `product-${created.id}`)
-    expect(boot.cloner.calls).toEqual([{ repoUrl: 'https://github.com/example/product.git', target: clonePath }])
+    const ready = await settleCloneToReady(boot, clonePath)
+    expect(ready.cloneState).toBe('ready')
     // The workspace's data directory and mount resolve to the clone.
     const dir = value(await call(boot, boot.admin, 'collab/workspace.dir', { workspaceId: created.id })) as { dir: string }
     expect(dir.dir).toBe(clonePath)
@@ -277,6 +339,64 @@ describe('collab/workspace methods', () => {
     expect(mounted.dir).toBe(clonePath)
     expect(mounted.workspace).toMatchObject({ path: clonePath, title: 'Product' })
     expect(fake.createCalls).toEqual([{ path: clonePath, title: 'Product', collabWorkspaceId: created.id }])
+  })
+
+  it('refuses to open or resolve a provisioning workspace until the clone settles', async () => {
+    const boot = await bootServices()
+    boot.cloner.stall()
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', {
+      name: 'Product',
+      repoUrl: 'https://github.com/example/product.git',
+    })) as CollabWorkspaceView
+    expect(created.cloneState).toBe('cloning')
+    const dir = await call(boot, boot.admin, 'collab/workspace.dir', { workspaceId: created.id })
+    expectCollabError(dir, 'collab-clone-pending')
+    // The mount path needs the host registry present to reach the working-dir
+    // gate; the gate itself rejects a provisioning workspace.
+    const fake = fakeWorkspaceRegistry(join(boot.root, 'unused'))
+    fake.register(boot.ctx)
+    const open = await call(boot, boot.admin, 'collab/workspace.open', { workspaceId: created.id })
+    expectCollabError(open, 'collab-clone-pending')
+    // Release the held clone so the background job settles before teardown.
+    boot.cloner.release()
+  })
+
+  it('removes a provisioning workspace when the background clone fails', async () => {
+    const boot = await bootServices()
+    boot.cloner.fail('repository not found')
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', {
+      name: 'Product',
+      repoUrl: 'https://github.com/example/missing.git',
+    })) as CollabWorkspaceView
+    // The create itself does not fail; the failed clone removes the record.
+    expect(created.cloneState).toBe('cloning')
+    await vi.waitFor(() => { expect(boot.cloner.calls).toHaveLength(1) })
+    await vi.waitFor(async () => {
+      const listed = value(await call(boot, boot.admin, 'collab/workspace.list', {})) as CollabWorkspaceView[]
+      expect(listed).toEqual([])
+    })
+    // A partial clone target left by the runner is cleaned up.
+    const target = join(boot.ctx.collabWorkspaces.root, 'workspaces', `product-${created.id}`)
+    await vi.waitFor(async () => {
+      await expect(stat(target)).rejects.toMatchObject({ code: 'ENOENT' })
+    })
+  })
+
+  it('removes the clone directory when the record was deleted mid-clone', async () => {
+    const boot = await bootServices()
+    boot.cloner.stall()
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', {
+      name: 'Product',
+      repoUrl: 'https://github.com/example/product.git',
+    })) as CollabWorkspaceView
+    await vi.waitFor(() => { expect(boot.cloner.calls).toHaveLength(1) })
+    await call(boot, boot.admin, 'collab/workspace.delete', { workspaceId: created.id })
+    const target = join(boot.ctx.collabWorkspaces.root, 'workspaces', `product-${created.id}`)
+    // The clone finishes after the record is gone; the orphaned target is removed.
+    boot.cloner.release()
+    await vi.waitFor(async () => {
+      await expect(stat(target)).rejects.toMatchObject({ code: 'ENOENT' })
+    })
   })
 
   it('rejects a non-string repository URL', async () => {
@@ -298,20 +418,45 @@ describe('collab/workspace methods', () => {
       name: 'Product',
       repoUrl: 'https://github.com/example/product.git',
     })) as CollabWorkspaceView
-    expect(boot.cloner.calls).toEqual([{ repoUrl: 'https://github.com/example/product.git', target: join(clonesRoot, `product-${created.id}`) }])
+    const clonePath = join(clonesRoot, `product-${created.id}`)
+    await settleCloneToReady(boot, clonePath)
+    expect(boot.cloner.calls).toEqual([{ repoUrl: 'https://github.com/example/product.git', target: clonePath }])
   })
 
-  it('fails as collab-clone-failed when the repository cannot be cloned, creating no workspace', async () => {
+  it('threads the server git credential into a clone of its pinned host', async () => {
     const boot = await bootServices()
-    boot.cloner.fail('repository not found')
-    const failed = await call(boot, boot.admin, 'collab/workspace.create', {
+    const credentials: GitCloneCredentials = { host: 'github.com', username: 'x-access-token', token: 'ghp_secret' }
+    boot.ctx.provide('collabGitCloneAuth', credentials)
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', {
       name: 'Product',
-      repoUrl: 'https://github.com/example/missing.git',
-    })
-    expectCollabError(failed, 'collab-clone-failed')
-    expect((failed as { error: { message: string } }).error.message).toContain('repository not found')
-    const listed = value(await call(boot, boot.admin, 'collab/workspace.list', {})) as CollabWorkspaceView[]
-    expect(listed).toEqual([])
+      repoUrl: 'https://github.com/example/product.git',
+    })) as CollabWorkspaceView
+    const githubPath = join(boot.ctx.collabWorkspaces.root, 'workspaces', `product-${created.id}`)
+    await settleCloneToReady(boot, githubPath)
+    const env = boot.cloner.envs[0]!
+    // The credential is scoped through a temporary GIT_CONFIG_GLOBAL for this
+    // clone only, and the temp dir is removed right after the clone.
+    expect(env.GIT_CONFIG_GLOBAL).toContain('dsh-collab-git-')
+    await expect(stat(env.GIT_CONFIG_GLOBAL!)).rejects.toMatchObject({ code: 'ENOENT' })
+    // A host the credential does not own clones unauthenticated.
+    const other = value(await call(boot, boot.admin, 'collab/workspace.create', {
+      name: 'Other',
+      repoUrl: 'https://gitlab.com/example/other.git',
+    })) as CollabWorkspaceView
+    const otherPath = join(boot.ctx.collabWorkspaces.root, 'workspaces', `other-${other.id}`)
+    await settleCloneToReady(boot, otherPath)
+    expect(boot.cloner.envs[1]).toBeUndefined()
+  })
+
+  it('clones unauthenticated when no server git credential is configured', async () => {
+    const boot = await bootServices()
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', {
+      name: 'Product',
+      repoUrl: 'https://github.com/example/product.git',
+    })) as CollabWorkspaceView
+    const clonePath = join(boot.ctx.collabWorkspaces.root, 'workspaces', `product-${created.id}`)
+    await settleCloneToReady(boot, clonePath)
+    expect(boot.cloner.envs).toEqual([undefined])
   })
 
   it('reads a workspace only for members', async () => {
@@ -619,7 +764,10 @@ type StubWebServer = {
   register: (route: { kind: 'exact'; path: string; handler: unknown }) => () => void
 }
 
-async function bootPlugin(overrides: GatewayOverrides = {}): Promise<{
+async function bootPlugin(
+  overrides: GatewayOverrides = {},
+  config: Parameters<typeof apply>[1] = {},
+): Promise<{
   ctx: Context
   connection: StubConnection
   web: StubWebServer
@@ -650,7 +798,7 @@ async function bootPlugin(overrides: GatewayOverrides = {}): Promise<{
   const web: StubWebServer = { routes: [], register(route) { web.routes.push({ ...route } as StubWebServer['routes'][number]); return () => {} } }
   boot.ctx.provide('connection' as never, connection as never)
   boot.ctx.provide('webServer' as never, web as never)
-  apply(boot.ctx)
+  apply(boot.ctx, config)
   return { ctx: boot.ctx, connection, web, auth: boot.ctx.collabAuth, booted: boot }
 }
 
@@ -816,6 +964,23 @@ describe('plugin wiring', () => {
     const res = fakeResponse()
     void login.handler({ method: 'POST', url: COLLAB_AUTH_LOGIN_PATH, headers: {} }, res)
     expect(res.statusCode).toBe(405)
+  })
+
+  it('provides the operator git credential from config, pinned to its host', async () => {
+    const { booted } = await bootPlugin({}, { gitToken: 'ghp_secret' })
+    expect(booted.ctx.get('collabGitCloneAuth', false)).toEqual({
+      host: 'github.com',
+      username: 'x-access-token',
+      token: 'ghp_secret',
+    })
+    const custom = await bootPlugin({}, { gitToken: 'ghp_secret', gitHost: 'gitlab.example.com', gitUsername: 'bot' })
+    expect(custom.booted.ctx.get('collabGitCloneAuth', false)).toEqual({
+      host: 'gitlab.example.com',
+      username: 'bot',
+      token: 'ghp_secret',
+    })
+    const absent = await bootPlugin({}, { cloneDir: '/clones' })
+    expect(absent.booted.ctx.get('collabGitCloneAuth', false)).toBeUndefined()
   })
 })
 

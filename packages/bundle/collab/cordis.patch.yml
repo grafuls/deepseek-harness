@@ -24,6 +24,10 @@
 
     - id: collab-api
       name: '@deepseek-ai/dsh-collab-api'
+      # Operator config only: `gitToken` (+ `gitHost`/`gitUsername`) lets the
+      # server clone private repositories; the token is never shown in the GUI.
+      # It is deliberately NOT declared here — supply it in the profile's
+      # cordis.patch.yml by id, the same way the collab-auth secrets are.
 
     # Browser half: the collab sign-in gate. This row declares dsh.client, so
     # the modules roster serves its bundle; the sign-in overlay renders only

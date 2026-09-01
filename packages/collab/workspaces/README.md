@@ -24,7 +24,7 @@ interface WorkspaceRecord {
 }
 ```
 
-A creator may bootstrap a workspace from a git repository: `create(role, id, name, { id, repoUrl, clonePath })` records the clone path atomically with the record. The registry never clones itself — the caller produces the clone and hands the record the facts — so a record never references a clone that was never created. `workspaceHolding(path)` resolves a Host-plane path beneath any recorded clone directory to its workspace, which is what lets the collab membership gate scope cloned working directories to members.
+A creator may bootstrap a workspace from a git repository. A provisioning bootstrap passes just `{ id, repoUrl }` to `create`, so the registry records no clone path yet and the member summaries carry `cloneState: 'cloning'`; the caller then settles the background result with `settleClone(id, { kind: 'cloned', clonePath })` (returns `'added'`, flipping the summary to `'ready'`), or `settleClone(id, { kind: 'failed' })` (`'removed'`, deleting the provisioning record). A caller that already produced the clone may pass `clonePath` at `create` to record it atomically with the record. Settling an already-settled or deleted record returns `'absent'`, which lets the caller drop an orphaned target directory. The registry never clones itself — the caller produces the clone and hands the record the facts — so a record never references a clone that was never created. `workspaceHolding(path)` resolves a Host-plane path beneath any recorded clone directory to its workspace, which is what lets the collab membership gate scope cloned working directories to members.
 
 ## Ownership and membership rules
 

@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-29-collab-repo-backed-workspaces.md
-2026-08-29-collab-repo-backed-workspaces.md: b097c2a4c929b522a1f34ece002366257fa955a6
-2026-08-29-collab-repo-backed-workspaces.zh.md: 69f20c343f036d022d768ae846237774891e8f5a
+2026-08-29-collab-repo-backed-workspaces.md: 05a07a391611937e3021033c7794c08df9d2d122
+2026-08-29-collab-repo-backed-workspaces.zh.md: 1170ee65b29c20c36e130f78aa6093ab7381036c

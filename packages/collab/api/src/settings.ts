@@ -10,6 +10,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type { GitCloneCredentials } from './clone.ts'
 
 /** The settings namespace owning collab instance tuning. */
 export const COLLAB_SETTINGS_NAMESPACE = settingsNamespace('collab')
@@ -57,4 +58,29 @@ export function readCloneDir(ctx: Context): string {
   const configured = settings?.get(String(COLLAB_SETTINGS_NAMESPACE))?.cloneDir
   const explicit = typeof configured === 'string' ? configured.trim() : ''
   return explicit === '' ? '' : explicit
+}
+
+/**
+ * Derive the server git clone credential from the collab API operator config:
+ * a basic-auth pair pinned to one host, or undefined when no token is
+ * configured (public repositories then clone unauthenticated). The host
+ * defaults to `github.com`; the username defaults to `x-access-token`, which
+ * GitHub accepts alongside a personal access token.
+ * @param config - the collab API plugin config.
+ * @returns the pinned git credential, or undefined without a configured token.
+ */
+export function cloneAuthFromConfig(config: {
+  gitHost?: string
+  gitUsername?: string
+  gitToken?: string
+}): GitCloneCredentials | undefined {
+  const token = config.gitToken?.trim() ?? ''
+  if (token === '') return undefined
+  const host = config.gitHost ?? ''
+  const username = config.gitUsername ?? ''
+  return {
+    host: host.trim() === '' ? 'github.com' : host.trim().toLowerCase(),
+    username: username.trim() === '' ? 'x-access-token' : username,
+    token,
+  }
 }

@@ -74,7 +74,32 @@ export interface WorkspaceSummary {
   isOwner: boolean
   role: WorkspaceRole
   createdAt: string
+  /**
+   * Lifecycle of the repository bootstrap: `cloning` while the collab
+   * gateway clones in the background, `ready` once the clone path is
+   * settled, `none` for a name-only workspace.
+   */
+  cloneState: CollabCloneState
 }
+
+/** Lifecycle of a repository-bootstrapped workspace's background clone. */
+export type CollabCloneState = 'none' | 'cloning' | 'ready'
+
+/**
+ * Outcome of a background repository clone, reported by the collab gateway
+ * once the clone settles.
+ */
+export type ClonedOutcome =
+  | { readonly kind: 'cloned'; readonly clonePath: string }
+  | { readonly kind: 'failed' }
+
+/**
+ * How a {@link @deepseek-ai/dsh-collab-workspaces!CollabWorkspaces.settleClone |
+ * settleClone} call affected the registry: `added` when the clone path was
+ * recorded, `removed` when a failed clone removed the provisioning record,
+ * and `absent` when the record no longer exists.
+ */
+export type CloneSettlement = 'added' | 'removed' | 'absent'
 
 /**
  * One pending invitation's accept-surface facts for the addressed user: the

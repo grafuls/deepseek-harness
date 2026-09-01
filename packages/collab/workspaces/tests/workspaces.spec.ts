@@ -411,3 +411,61 @@ describe('persistence and events', () => {
     expect(after).toBe(before)
   })
 })
+
+describe('repo-bootstrap clone lifecycle', () => {
+  it('projects the clone state and settles a finished clone path', async () => {
+    const { ctx } = await harness()
+    const alice = await user(ctx, 'sub-alice', 'alice@example.com', 'Alice')
+    const nameOnly = await ctx.collabWorkspaces.create(alice.globalRole, alice.id, 'Notes')
+    expect(ctx.collabWorkspaces.listFor(alice.id).find(entry => entry.id === nameOnly.id)!.cloneState).toBe('none')
+    const ws = await ctx.collabWorkspaces.create(alice.globalRole, alice.id, 'Product', {
+      repoUrl: 'https://github.com/example/product.git',
+    })
+    expect(ws.clonePath).toBeUndefined()
+    const [cloning] = ctx.collabWorkspaces.listFor(alice.id).slice(-1)
+    expect(cloning!.cloneState).toBe('cloning')
+    expect(await ctx.collabWorkspaces.settleClone(ws.id, { kind: 'cloned', clonePath: '/clones/product-1' })).toBe('added')
+    const settled = ctx.collabWorkspaces.findById(ws.id)!
+    expect(settled.clonePath).toBe('/clones/product-1')
+    expect(ctx.collabWorkspaces.listFor(alice.id).find(entry => entry.id === ws.id)!.cloneState).toBe('ready')
+    // A second settle is idempotent and does not overwrite the recorded path.
+    expect(await ctx.collabWorkspaces.settleClone(ws.id, { kind: 'cloned', clonePath: '/clones/other' })).toBe('added')
+    expect(ctx.collabWorkspaces.findById(ws.id)!.clonePath).toBe('/clones/product-1')
+  })
+
+  it('removes the provisioning record when the clone fails', async () => {
+    const { ctx } = await harness()
+    const alice = await user(ctx, 'sub-alice', 'alice@example.com', 'Alice')
+    const bob = await user(ctx, 'sub-bob', 'bob@example.com', 'Bob')
+    // A second workspace with a pending invitation survives the removal, so
+    // the failed settle proves invitations of the failed workspace go away
+    // while the rest of the registry stays untouched.
+    const keep = await ctx.collabWorkspaces.create(alice.globalRole, alice.id, 'Keep')
+    await ctx.collabWorkspaces.invite('admin', keep.id, alice.id, 'bob@example.com')
+    const ws = await ctx.collabWorkspaces.create(alice.globalRole, alice.id, 'Product', {
+      repoUrl: 'https://github.com/example/product.git',
+    })
+    await ctx.collabWorkspaces.invite('admin', ws.id, alice.id, 'bob@example.com')
+    void bob
+    expect(await ctx.collabWorkspaces.settleClone(ws.id, { kind: 'failed' })).toBe('removed')
+    expect(ctx.collabWorkspaces.findById(ws.id)).toBeUndefined()
+    expect(await ctx.collabWorkspaces.settleClone(ws.id, { kind: 'failed' })).toBe('absent')
+    await expect(ctx.collabWorkspaces.listInvitations('admin', keep.id)).resolves.toHaveLength(1)
+  })
+
+  it('reports absent when settling a deleted or already-settled record', async () => {
+    const { ctx } = await harness()
+    const alice = await user(ctx, 'sub-alice', 'alice@example.com', 'Alice')
+    expect(await ctx.collabWorkspaces.settleClone(WorkspaceId('nope'), { kind: 'cloned', clonePath: '/x' })).toBe('absent')
+    const ws = await ctx.collabWorkspaces.create(alice.globalRole, alice.id, 'Product', {
+      repoUrl: 'https://github.com/example/product.git',
+    })
+    await ctx.collabWorkspaces.settleClone(ws.id, { kind: 'cloned', clonePath: '/clones/a' })
+    // The record is already ready; a failed settle leaves it untouched.
+    expect(await ctx.collabWorkspaces.settleClone(ws.id, { kind: 'failed' })).toBe('absent')
+    expect(ctx.collabWorkspaces.findById(ws.id)!.clonePath).toBe('/clones/a')
+    // Deleting the record then settling mirrors the delete-mid-clone race.
+    await ctx.collabWorkspaces.delete('admin', ws.id)
+    expect(await ctx.collabWorkspaces.settleClone(ws.id, { kind: 'cloned', clonePath: '/clones/b' })).toBe('absent')
+  })
+})

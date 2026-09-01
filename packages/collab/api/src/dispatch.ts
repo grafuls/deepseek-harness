@@ -5,7 +5,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
@@ -20,8 +20,9 @@ import type {
   WorkspaceSummary,
 } from '@deepseek-ai/dsh-collab-workspaces'
 import { InvitationId as makeInvitationId, WorkspaceId as makeWorkspaceId } from '@deepseek-ai/dsh-collab-workspaces'
-import type { NativeCommandRunner } from '@deepseek-ai/dsh-native-command'
-import { cloneDirectoryName, cloneFailureMessage, cloneRepository } from './clone.ts'
+import { cloneStateOf, type ClonedOutcome, type CloneSettlement } from '@deepseek-ai/dsh-collab-workspaces'
+import { cloneDirectoryName, cloneRepository } from './clone.ts'
+import type { GitCloneCredentials, GitCommandRunner } from './clone.ts'
 import { readCloneDir } from './settings.ts'
 import type {
   CollabInvitationForMeView,
@@ -163,6 +164,7 @@ function recordView(record: WorkspaceRecord, viewer: string): CollabWorkspaceVie
     isOwner: record.ownerId === viewer,
     role: membership.role,
     createdAt: record.createdAt,
+    cloneState: cloneStateOf(record),
   }
 }
 
@@ -230,7 +232,6 @@ ENDPOINTS.set('collab/workspace.create', async (ctx, principal, args) => {
   const record = await createClonedWorkspace(ctx, principal, name, repoUrl)
   return collabOk(recordView(record, principal.userId))
 })
-
 ENDPOINTS.set('collab/workspace.get', async (ctx, principal, args) => {
   const { wsId, role } = requireWorkspaceAndRole(ctx, principal, requireString(args, 'workspaceId', 'collab/workspace.get'))
   const record = await ctx.collabWorkspaces.get(role, principal.userId, wsId)
@@ -488,25 +489,36 @@ function cloneRootOf(ctx: Context): string {
 /**
  * The working directory a collab workspace mounts over: its recorded clone
  * directory when bootstrapped from a repository, its reserved data directory
- * otherwise.
+ * otherwise. A repository-bootstrapped workspace whose background clone has
+ * not settled yet answers `collab-clone-pending` (the clone directory does
+ * not exist to mount over).
  * @param ctx - the collab API plugin context.
  * @param record - the workspace record.
  * @returns the absolute working directory.
  */
 function workspaceWorkingDir(ctx: Context, record: WorkspaceRecord): string {
-  return record.clonePath ?? workspaceDataDir(ctx.collabWorkspaces.root, record.id)
+  if (record.clonePath !== undefined) return record.clonePath
+  if (record.repoUrl !== undefined) {
+    throw new CollabWireError('collab-clone-pending', `collab: workspace '${record.id}' repository clone has not finished`)
+  }
+  return workspaceDataDir(ctx.collabWorkspaces.root, record.id)
 }
 
 /**
- * Bootstrap a workspace from a repository: mint the id, clone the repository
- * into `<clone root>/<repo>-<workspaceId>`, then commit the record carrying
- * the repo URL and clone path atomically. A failed clone removes the partial
- * target and surfaces as `collab-clone-failed` before any record exists.
+ * Bootstrap a workspace from a repository: mint the id, register a
+ * provisioning record (no clone path yet), and start the background clone
+ * into `<clone root>/<repo>-<workspaceId>`. The request returns immediately
+ * with the provisioning record — the clone never holds the browser's HTTP
+ * request open across a slow repository transfer, which a reverse proxy or
+ * NAT idle timeout would otherwise cut. The background job settles the
+ * record with the clone path on success, or removes it on failure (a failed
+ * clone leaves no workspace behind). Until the clone settles, opening the
+ * workspace or resolving its directory answers `collab-clone-pending`.
  * @param ctx - the collab API plugin context.
  * @param principal - the creating, gate-resolved caller.
  * @param name - the workspace display name.
  * @param repoUrl - the validated repository URL to clone.
- * @returns the created workspace record.
+ * @returns the created provisioning workspace record.
  */
 async function createClonedWorkspace(
   ctx: Context,
@@ -516,17 +528,53 @@ async function createClonedWorkspace(
 ): Promise<WorkspaceRecord> {
   const wsId = makeWorkspaceId(randomUUID())
   const clonePath = join(cloneRootOf(ctx), cloneDirectoryName(String(wsId), repoUrl))
-  const runner = ctx.get('collabRepoCloner', false) as NativeCommandRunner | undefined
-  try {
-    await cloneRepository(repoUrl, clonePath, runner)
-  } catch (error) {
-    throw new CollabWireError('collab-clone-failed', `collab: ${cloneFailureMessage(repoUrl, error)}`)
-  }
-  return ctx.collabWorkspaces.create(principal.globalRole, principal.userId, name, {
+  const record = await ctx.collabWorkspaces.create(principal.globalRole, principal.userId, name, {
     id: wsId,
     repoUrl,
-    clonePath,
   })
+  const controller = new AbortController()
+  // The clone runs as a fire-and-forget job: nothing awaits it, so a slow
+  // repository transfer can never block a request or plugin teardown. A
+  // disposer aborts the in-flight clone when the collab gateway tears down.
+  void cloneJob(ctx, wsId, repoUrl, clonePath, controller.signal)
+    .then((settlement) => {
+      if (settlement === 'absent') return rm(clonePath, { recursive: true, force: true })
+    })
+    .catch((error: unknown) => {
+      ctx.logger.error(`collab clone of '${repoUrl}' abandoned: ${String(error)}`)
+    })
+  ctx.effect(() => () => { controller.abort() }, `collab clone cancel ${String(wsId)}`)
+  return record
+}
+
+/**
+ * Run one background repository clone and settle its workspace. A clone
+ * failure is an expected outcome that removes the provisioning record, so it
+ * is folded into the failed settlement rather than thrown.
+ * @param ctx - the collab API plugin context.
+ * @param wsId - the provisioning workspace.
+ * @param repoUrl - the validated repository URL to clone.
+ * @param clonePath - the resolved `<clone root>/<repo>-<workspaceId>` target.
+ * @param signal - the clone job's cancellation signal.
+ * @returns the settlement reported by the workspaces registry.
+ */
+async function cloneJob(
+  ctx: Context,
+  wsId: WorkspaceId,
+  repoUrl: string,
+  clonePath: string,
+  signal: AbortSignal,
+): Promise<CloneSettlement> {
+  const runner = ctx.get('collabRepoCloner', false) as GitCommandRunner | undefined
+  const credentials = ctx.get('collabGitCloneAuth', false) as GitCloneCredentials | undefined
+  let outcome: ClonedOutcome
+  try {
+    await cloneRepository(repoUrl, clonePath, runner, credentials, signal)
+    outcome = { kind: 'cloned', clonePath }
+  } catch {
+    outcome = { kind: 'failed' }
+  }
+  return ctx.collabWorkspaces.settleClone(wsId, outcome)
 }
 
 /**

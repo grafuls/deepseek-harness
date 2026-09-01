@@ -35,7 +35,7 @@ function fakeCall(script: Array<{ endpoint: string; payload: unknown; result: Co
 
 describe('CollabApi', () => {
   it('lists and creates workspaces over the shared /api channel', async () => {
-    const view = { id: 'w1', name: 'Alpha', memberCount: 1, isOwner: true, role: 'admin', createdAt: '2020-01-01T00:00:00.000Z' }
+    const view = { id: 'w1', name: 'Alpha', memberCount: 1, isOwner: true, role: 'admin', createdAt: '2020-01-01T00:00:00.000Z', cloneState: 'ready' }
     const { call, seen } = fakeCall([
       { endpoint: 'collab/workspace.list', payload: {}, result: ok([view]) },
       { endpoint: 'collab/workspace.create', payload: { name: 'Alpha' }, result: ok(view) },
@@ -85,7 +85,7 @@ describe('CollabApi', () => {
 
   it('lists the pending invitations addressed to the user and joins by invitation id', async () => {
     const mine = { id: 'i1', workspaceId: 'w1', workspaceName: 'Alpha', role: 'admin', createdAt: '2020-01-01T00:00:00.000Z' }
-    const joined = { id: 'w1', name: 'Alpha', memberCount: 2, isOwner: false, role: 'admin', createdAt: '2020-01-01T00:00:00.000Z' }
+    const joined = { id: 'w1', name: 'Alpha', memberCount: 2, isOwner: false, role: 'admin', createdAt: '2020-01-01T00:00:00.000Z', cloneState: 'ready' }
     const { call, seen } = fakeCall([
       { endpoint: 'collab/workspace.myInvitations', payload: {}, result: ok([mine]) },
       { endpoint: 'collab/workspace.join', payload: { invitationId: 'i1' }, result: ok(joined) },

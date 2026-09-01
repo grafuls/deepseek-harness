@@ -233,6 +233,11 @@
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
+.iconButton:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 /* Pending-invitation accept rows: compact and out of the scrolling list. */
 .invitations {
   flex: none;
@@ -351,6 +356,15 @@
   text-align: left;
   font-size: 14px;
   line-height: 20px;
+}
+
+.cloneBadge {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--dsw-alias-state-business-tertiary);
+  color: var(--dsw-alias-state-business-primary);
+  font-size: 12px;
 }
 
 .rowMeta {

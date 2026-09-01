@@ -204,6 +204,18 @@ findInvitationById(id: InvitationId): WorkspaceInvitation | undefined
 roleOf(workspaceId: WorkspaceId, userId: UserId): WorkspaceRole | undefined
 
 /**
+ * The workspace whose cloned repository directory contains `path`, if any.
+ * The collab membership gate uses this to scope the Host plane: a session
+ * working directory or workspace path beneath a recorded clone directory
+ * resolves to its workspace, so the gate can decide membership instead of
+ * treating the clone as an unowned Host path. The comparison uses the real
+ * path of each recorded clone directory so Host-plane canonical paths match.
+ * @param path - a Host-plane workspace directory or session working directory.
+ * @returns the workspace id owning the containing clone, or undefined.
+ */
+workspaceHolding(path: string): WorkspaceId | undefined
+
+/**
  * Synchronous per-member lookup.
  * @param workspaceId - the workspace to inspect.
  * @param userId - the member to find.
@@ -220,13 +232,17 @@ listFor(userId: UserId): WorkspaceSummary[]
 
 /**
  * Create a workspace. Any authenticated user may create one; the creator
- * becomes the owner and its first `admin` member.
+ * becomes the owner and its first `admin` member. Repository-bootstrap
+ * options record a clone the caller already produced (see
+ * {@link CreateWorkspaceOptions}), so the record and its backing directory
+ * commit atomically or not at all.
  * @param actorGlobalRole - the acting user's global role (needs `workspace.create`).
  * @param actorId - the creating user.
  * @param name - display name (trimmed; must not be empty).
+ * @param options - optional repository-bootstrap facts and an explicit id.
  * @returns the new workspace.
  */
-async create(actorGlobalRole: GlobalRole, actorId: UserId, name: string): Promise<WorkspaceRecord>
+async create( actorGlobalRole: GlobalRole, actorId: UserId, name: string, options: CreateWorkspaceOptions = {}, ): Promise<WorkspaceRecord>
 
 /**
  * Read one workspace the actor is a member of.
@@ -330,6 +346,23 @@ async removeMember( actorWorkspaceRole: WorkspaceRole, workspaceId: WorkspaceId,
  * @param workspaceId - the workspace.
  */
 async delete(actorWorkspaceRole: WorkspaceRole, workspaceId: WorkspaceId): Promise<void>
+
+/**
+ * Settle the background clone of a repository-bootstrapped workspace. The
+ * collab gateway calls this after its async clone finishes: a `cloned`
+ * outcome records the finished clone path, a `failed` outcome removes the
+ * provisioning record (a failed clone leaves no workspace behind, matching
+ * the pre-request removal contract). This is an in-process gateway
+ * operation, never a wire endpoint, so a member cannot assert a clone path
+ * for someone else's workspace.
+ * @param workspaceId - the provisioning workspace.
+ * @param outcome - the finished clone path, or a failed clone.
+ * @returns `added` when the clone path was recorded, `removed` when the
+ *   failed clone removed the provisioning record, and `absent` when the
+ *   record no longer exists (deleted or already settled) — the caller then
+ *   removes the (partial) clone directory.
+ */
+async settleClone(workspaceId: WorkspaceId, outcome: ClonedOutcome): Promise<CloneSettlement>
 ```
 
 Types: [WorkspaceId](workspace.md)

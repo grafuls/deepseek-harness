@@ -122,6 +122,11 @@
   font-size: 12px;
 }
 
+.cloneBadge {
+  background: var(--dsw-alias-state-business-tertiary);
+  color: var(--dsw-alias-state-business-primary);
+}
+
 .createRow {
   display: flex;
   gap: 8px;

@@ -53,7 +53,7 @@ export class CollabWorkspacesController {
         case 'collab-forbidden': return this.t('errorForbidden')
         case 'collab-not-found': return this.t('errorNotFound')
         case 'collab-bad-request': return this.t('errorBadRequest')
-        case 'collab-clone-failed': return this.t('errorCloneFailed')
+        case 'collab-clone-pending': return this.t('errorClonePending')
         default: return this.t('errorFailed')
       }
     }

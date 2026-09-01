@@ -17,7 +17,7 @@ afterEach(() => {
   cleanup()
 })
 
-const WORKSPACE: CollabWorkspaceView = { id: 'w1', name: 'Alpha', memberCount: 2, isOwner: true, role: 'admin', createdAt: '2020-01-01T00:00:00.000Z' }
+const WORKSPACE: CollabWorkspaceView = { id: 'w1', name: 'Alpha', memberCount: 2, isOwner: true, role: 'admin', createdAt: '2020-01-01T00:00:00.000Z', cloneState: 'ready' }
 const MEMBER: CollabMemberView = { userId: 'u1', email: 'owen@example.com', name: 'Owen', role: 'admin', joinedAt: '2020-01-01T00:00:00.000Z' }
 const INVITATION: CollabInvitationView = { id: 'i1', workspaceId: 'w1', email: 'lina@example.com', role: 'developer', createdBy: 'u1', createdAt: '2020-01-01T00:00:00.000Z', revoked: false }
 
@@ -92,6 +92,12 @@ describe('WorkspacesPanel', () => {
     expect(screen.getByText('Alpha')).toBeTruthy()
     expect(screen.getByText('Admin')).toBeTruthy()
     expect(screen.getByText('2 members')).toBeTruthy()
+  })
+
+  it('tags a repository-backed workspace that is still cloning', () => {
+    panel(readyState({ workspaces: [{ ...WORKSPACE, cloneState: 'cloning' }] }))
+    expect(screen.getByText('Cloning…')).toBeTruthy()
+    expect(screen.getByText('Alpha')).toBeTruthy()
   })
 
   it('shows the empty state with a working create affordance', () => {
@@ -183,7 +189,7 @@ describe('WorkspacesPanel', () => {
 
   it('keeps the modal open and the error banner visible when creation fails', async () => {
     const create = vi.fn(async () => false)
-    panel(readyState({ error: 'Could not clone the repository, please check the URL' }), { create })
+    panel(readyState({ error: 'This workspace is still cloning, try again shortly' }), { create })
     fireEvent.click(screen.getByText('＋ New workspace'))
     fireEvent.change(screen.getByPlaceholderText('Workspace name'), { target: { value: 'Product' } })
     fireEvent.change(screen.getByPlaceholderText('GitHub repository URL (optional)'), { target: { value: 'https://github.com/example/private.git' } })
@@ -191,7 +197,7 @@ describe('WorkspacesPanel', () => {
     await waitFor(() => { expect(create).toHaveBeenCalledWith('Product', 'https://github.com/example/private.git') })
     // The panel banner and the modal banner both surface the store error.
     const modal = within(screen.getByRole('dialog', { name: 'New collaborative workspace' }))
-    expect(modal.getByText('Could not clone the repository, please check the URL')).toBeTruthy()
+    expect(modal.getByText('This workspace is still cloning, try again shortly')).toBeTruthy()
     expect(modal.getByPlaceholderText('GitHub repository URL (optional)')).toBeTruthy()
   })
 

@@ -473,6 +473,28 @@ export interface Config {
 
 Source: [`packages/code-runtime/code-runtime-worker-thread/src/index.ts:25`](../packages/code-runtime/code-runtime-worker-thread/src/index.ts)
 
+<a id="deepseek-aidsh-collab-api"></a>
+
+## `@deepseek-ai/dsh-collab-api`
+
+Requires: `webServer` · `connection` · `collabAuth` · `collabUsers` · `collabWorkspaces`
+
+```ts config-catalog
+/** Plugin config: the default clone directory and the optional server git credential for private clones. */
+export interface Config {
+  /** Default directory for cloning repositories that back new workspaces; empty uses the collab data root. */
+  cloneDir?: string
+  /** Host the git credential authorizes; defaults to `github.com`. */
+  gitHost?: string
+  /** Basic-auth username paired with the token; defaults to `x-access-token` (accepted by GitHub PATs). */
+  gitUsername?: string
+  /** Operator git token (PAT / app password) for cloning private repositories; never shown in the GUI. */
+  gitToken?: string
+}
+```
+
+Source: [`packages/collab/api/src/index.ts:33`](../packages/collab/api/src/index.ts)
+
 <a id="deepseek-aidsh-collab-auth"></a>
 
 ## `@deepseek-ai/dsh-collab-auth`
@@ -588,7 +610,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/collab/workspaces/src/index.ts:87`](../packages/collab/workspaces/src/index.ts)
+Source: [`packages/collab/workspaces/src/index.ts:92`](../packages/collab/workspaces/src/index.ts)
 
 <a id="deepseek-aidsh-compaction-basic"></a>
 
@@ -3381,7 +3403,6 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 - `@deepseek-ai/dsh-client-ui-user-questions` ([`packages/client/ui-user-questions/src/index.ts`](../packages/client/ui-user-questions/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-workflow-run` ([`packages/client/ui-workflow-run/src/index.ts`](../packages/client/ui-workflow-run/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-workspace` ([`packages/client/ui-workspace/src/index.ts`](../packages/client/ui-workspace/src/index.ts))
-- `@deepseek-ai/dsh-collab-api` — requires `webServer` · `connection` · `collabAuth` · `collabUsers` · `collabWorkspaces` ([`packages/collab/api/src/index.ts`](../packages/collab/api/src/index.ts))
 - `@deepseek-ai/dsh-collab-rbac` ([`packages/collab/rbac/src/index.ts`](../packages/collab/rbac/src/index.ts))
 - `@deepseek-ai/dsh-command-compact` — requires `commands` · `compaction` ([`packages/compaction/command-compact/src/index.ts`](../packages/compaction/command-compact/src/index.ts))
 - `@deepseek-ai/dsh-command-feedback` — requires `commands` ([`packages/feedback/command-feedback/src/index.ts`](../packages/feedback/command-feedback/src/index.ts))

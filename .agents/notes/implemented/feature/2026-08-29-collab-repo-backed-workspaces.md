@@ -4,6 +4,8 @@ Status: implemented
 
 English | [中文](2026-08-29-collab-repo-backed-workspaces.zh.md)
 
+Superseded in part by [collab async repository provisioning](2026-09-01-collab-async-repo-provisioning.md): the clone now runs in the background with an auto-removing provisioning record, and `collab-clone-failed` is no longer an answer.
+
 ## Problem
 
 Creating a collaborative workspace produced a name-only workspace whose data directory was materialized empty under the collab data root. There was no way to start a workspace from an existing repository: members had to create an empty workspace, then bring their own code in by hand. The requested flow was the opposite: type a GitHub repository URL at creation, have that repository cloned into a local directory, and use the clone as the workspace — plus a settings entry on the Collaborative Workspaces settings page for the default directory those clones land in.
@@ -18,6 +20,7 @@ Creating a collaborative workspace produced a name-only workspace whose data dir
 - A failed clone removes the partial target directory and answers `collab-clone-failed`; no workspace record is created, so a failed repository bootstrap leaves nothing behind.
 - `collab/workspace.open` and `collab/workspace.dir` resolve a repo-backed record's working directory to `record.clonePath`, so every member shares the cloned working tree as the mounted workspace's data. The clone path is stored on the record rather than re-derived, so later changes to `cloneDir` do not relocate or orphan existing workspaces.
 - The access gate consults the workspaces service's `workspaceHolding(path)` relationship (the first record whose canonical clone path contains the path), which covers clones outside the data root; paths under the data root's `workspaces` prefix remain covered by the existing prefix check.
+- A private repository clones only when the operator configures a server git credential (`gitToken`, with `gitHost` defaulting to `github.com` and `gitUsername` defaulting to `x-access-token`). The credential is plugin config only — deliberately never routed through the settings namespace the GUI reads back — and the clone sends it to its pinned host through a temporary `GIT_CONFIG_GLOBAL` carrying a host-scoped `Authorization` header that exists for the clone and is removed on every path, so the token never reaches argv, the workspace record, the clone's own config, or the wire diagnostics.
 
 ## Alternatives considered
 
@@ -31,5 +34,6 @@ Creating a collaborative workspace produced a name-only workspace whose data dir
 - The new settings section is optional: ui-collab registers it only once the settings surface is present (it reads `settingsScope` optionally), so a single-user `web` profile that omits the settings surface is unchanged.
 - Repository-backed and data-dir workspaces now differ in where their data lives; delete still removes only the registry record, deliberately leaving the clone (or data) directory on disk.
 - The clone contract and its access gate stay server-owned; the URL in the UI is a convenience, not an enforcement point.
+- A private-repository clone fails fast with git's stderr until the operator configures the server credential, then clones through basic auth; public repositories still clone unauthenticated, and a host the credential does not own never receives it, so a member pointing at a hostile URL cannot exfiltrate the server token.
 - Surfacing the create failure exposed a latent theme defect: the dark theme's error aliases mapped both the banner text (`state-error-primary`) and its backdrop (`state-error-secondary`) to `red-400`, so any error banner read as empty. The dark theme now backs error banners with the deep `red-900` so the `red-400` text is legible; the modal also renders a generic message when the store error is absent rather than an empty box.
 - The invitation accept surface is kept live without a reload: opening the manager panel refreshes the workspace list and the signed-in user's pending invitations, and while the collab surface is mounted the controller re-reads both on a thirty-second interval (skipping while a mutation or the availability probe is in flight), so an invitation sent after page load appears on its own.

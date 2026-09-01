@@ -155,6 +155,9 @@ function WorkspacesList({ state, actions, t }: {
           onClick={() => { actions.select(workspace.id) }}
         >
           <span className={css.rowName}>{workspace.name}</span>
+          {workspace.cloneState === 'cloning' && (
+            <span className={`${css.badge} ${css.cloneBadge}`}>{t('cloneCloning')}</span>
+          )}
           <span className={css.badge}>{roleLabel(t, workspace.role)}</span>
           <span className={css.rowMeta}>{t('memberCount', { count: String(workspace.memberCount) })}</span>
         </button>

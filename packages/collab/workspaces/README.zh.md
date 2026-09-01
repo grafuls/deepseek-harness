@@ -24,7 +24,7 @@ interface WorkspaceRecord {
 }
 ```
 
-创建者可以把工作区从 git 仓库引导启动：`create(role, id, name, { id, repoUrl, clonePath })` 把克隆路径与记录原子地写在一起。注册表自己从不克隆——调用方产出克隆并把事实交给记录——因此记录绝不会引用一个从未创建的克隆。`workspaceHolding(path)` 把位于任何已记录克隆目录之下的 Host 平面路径解析到它的工作区，这正是让 collab 成员资格门能把克隆工作目录限定到成员的原因。
+创建者可以把工作区从 git 仓库引导启动。置备式引导只给 `create` 传 `{ id, repoUrl }`，注册表暂不记录克隆路径，成员摘要的 `cloneState` 为 `cloning`；随后调用方用 `settleClone(id, { kind: 'cloned', clonePath })` 落定后台结果（返回 `'added'`，摘要翻转为 `'ready'`），或用 `settleClone(id, { kind: 'failed' })`（返回 `'removed'`，删除置备记录）。若调用方已产出克隆，也可以在 `create` 时直接传 `clonePath`，把克隆路径与记录原子地写在一起。对已经落定或已删除的记录调用 settle 返回 `'absent'`，调用方可据此清理孤儿目标目录。注册表自己从不克隆——调用方产出克隆并把事实交给记录——因此记录绝不会引用一个从未创建的克隆。`workspaceHolding(path)` 把位于任何已记录克隆目录之下的 Host 平面路径解析到它的工作区，这正是让 collab 成员资格门能把克隆工作目录限定到成员的原因。
 
 ## 所有权与成员规则
 

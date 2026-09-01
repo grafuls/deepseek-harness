@@ -11,7 +11,7 @@ import { CollabWorkspacesController, type WorkspacePort } from '../src/client/co
 import { zh, type CollabKey } from '../src/client/locales.ts'
 import { createCollabWorkspacesStore } from '../src/client/store.ts'
 
-const WORKSPACE: CollabWorkspaceView = { id: 'w1', name: 'Alpha', memberCount: 2, isOwner: true, role: 'admin', createdAt: '2020-01-01T00:00:00.000Z' }
+const WORKSPACE: CollabWorkspaceView = { id: 'w1', name: 'Alpha', memberCount: 2, isOwner: true, role: 'admin', createdAt: '2020-01-01T00:00:00.000Z', cloneState: 'ready' }
 const MEMBER: CollabMemberView = { userId: 'u1', email: 'owen@example.com', name: 'Owen', role: 'admin', joinedAt: '2020-01-01T00:00:00.000Z' }
 const INVITATION: CollabInvitationView = { id: 'i1', workspaceId: 'w1', email: 'lina@example.com', role: 'developer', createdBy: 'u1', createdAt: '2020-01-01T00:00:00.000Z', revoked: false }
 const MOUNTED = {
@@ -403,11 +403,11 @@ describe('CollabWorkspacesController', () => {
     expect(seenPayloads[0]).toEqual({ name: 'Beta' })
   })
 
-  it('folds a clone failure into the dedicated banner', async () => {
-    const { store, controller } = harness({ 'collab/workspace.create': [refusal('collab-clone-failed')] })
-    await controller.create('Product', 'https://github.com/example/no.git')
-    expect(store.getSnapshot().error).toBe('克隆仓库失败，请检查地址后重试')
-    expect(store.getSnapshot().working).toBe(false)
+  it('folds a not-yet-ready clone into the pending banner', async () => {
+    const { store, controller } = harness({ 'collab/workspace.open': [refusal('collab-clone-pending')] })
+    store.set({ ...store.getSnapshot(), workspaces: [{ ...WORKSPACE, cloneState: 'cloning' }] })
+    await controller.openWorkspace('w1')
+    expect(store.getSnapshot().error).toBe('工作区仍在克隆中，请稍后再试')
   })
 
   it('invites, revokes, changes roles, and removes members against the selection', async () => {
@@ -458,7 +458,7 @@ describe('CollabWorkspacesController', () => {
   })
 
   it('deletes a workspace by id and drops only that record', async () => {
-    const second: CollabWorkspaceView = { id: 'w2', name: 'Beta', memberCount: 3, isOwner: false, role: 'developer', createdAt: '2021-01-01T00:00:00.000Z' }
+    const second: CollabWorkspaceView = { id: 'w2', name: 'Beta', memberCount: 3, isOwner: false, role: 'developer', createdAt: '2021-01-01T00:00:00.000Z', cloneState: 'ready' }
     const { store, controller, seen } = harness({
       'collab/workspace.delete': [ok({ deleted: true })],
     })

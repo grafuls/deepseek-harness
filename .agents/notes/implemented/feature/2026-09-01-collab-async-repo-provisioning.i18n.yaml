@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-01-collab-async-repo-provisioning.md
-2026-09-01-collab-async-repo-provisioning.md: 24e115d1f93314e54f5bec4ab478cc67b4970636
-2026-09-01-collab-async-repo-provisioning.zh.md: 3cc6aa1dd304c3f7057bff4d620e12eb2bddc550
+2026-09-01-collab-async-repo-provisioning.md: 70074ac355d5f32731bace5ea92fe3579ca8551d
+2026-09-01-collab-async-repo-provisioning.zh.md: 9e97547c4da1893b2553111cdba255436dbeb7ee

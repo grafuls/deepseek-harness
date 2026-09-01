@@ -7,7 +7,7 @@
 import type { IncomingHttpHeaders } from 'node:http'
 import { EventEmitter } from 'node:events'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
-import { stat } from 'node:fs/promises'
+import { stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -426,6 +426,41 @@ describe('collab/workspace methods', () => {
     const clonePath = join(clonesRoot, `product-${created.id}`)
     await settleCloneToReady(boot, clonePath)
     expect(boot.cloner.calls).toEqual([{ repoUrl: 'https://github.com/example/product.git', target: clonePath }])
+  })
+
+  it('creates the clone root on demand before cloning', async () => {
+    const boot = await bootServices()
+    const clonesRoot = join(boot.root, 'created-clones')
+    boot.ctx.provide('settings', { get: () => ({ cloneDir: clonesRoot }) } as never)
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', {
+      name: 'Product',
+      repoUrl: 'https://github.com/example/product.git',
+    })) as CollabWorkspaceView
+    // git only creates the leaf target, so the server builds the configured
+    // root recursively at create time rather than letting the clone fail.
+    expect((await stat(clonesRoot)).isDirectory()).toBe(true)
+    const clonePath = join(clonesRoot, `product-${created.id}`)
+    await settleCloneToReady(boot, clonePath)
+    expect(boot.cloner.calls).toEqual([{ repoUrl: 'https://github.com/example/product.git', target: clonePath }])
+  })
+
+  it('answers collab-bad-request when the clone root cannot be created', async () => {
+    const boot = await bootServices()
+    // A configured root whose parent is a regular file cannot be created, so
+    // the create fails loudly instead of silently removing a workspace after
+    // a doomed background clone.
+    const blocker = join(boot.root, 'clone-blocker')
+    await writeFile(blocker, 'not-a-directory')
+    boot.ctx.provide('settings', { get: () => ({ cloneDir: join(blocker, 'sub') }) } as never)
+    const result = await call(boot, boot.admin, 'collab/workspace.create', {
+      name: 'Product',
+      repoUrl: 'https://github.com/example/product.git',
+    })
+    expectCollabError(result, 'collab-bad-request')
+    // Nothing was provisioned: no record and no background clone.
+    expect(boot.cloner.calls).toEqual([])
+    const listed = value(await call(boot, boot.admin, 'collab/workspace.list', {})) as CollabWorkspaceView[]
+    expect(listed).toEqual([])
   })
 
   it('threads the server git credential into a clone of its pinned host', async () => {

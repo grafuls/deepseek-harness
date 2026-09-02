@@ -1,14 +1,16 @@
 // @vitest-environment jsdom
 /**
- * CollabSection rendering (the sidebar section right below the Workspaces
- * browsing region): the visibility contract per availability, the header
- * (title, expanding search, view options, add workspace), collab workspace
- * rows that mirror the browsing region's project-row anatomy with inline
- * sessions below them (open on click), the session rows' status/time/selected
- * chrome, the hover-revealed row actions, search filtering, the view options
+ * CollabSection rendering (the "Workspaces" section that fills the
+ * sidebar's single Workspaces seat, replacing the local browsing region): the
+ * visibility contract per availability, the section toolbar (title, expanding
+ * search, view options, add workspace), collab workspace rows that mirror the
+ * browsing region's project-row anatomy with inline sessions below them (open
+ * on click), the session rows' status/time/selected chrome, the
+ * hover-revealed row actions, search filtering, the view options
  * grouping/order behavior, invitation accept rows, the empty message, and
- * creation through the header add affordance. Props are fed directly (hooks
- * bound by the renderer in production); no render machinery here.
+ * creation through the toolbar add affordance, plus the collapsed-rail search
+ * control. Props are fed directly (hooks bound by the renderer in
+ * production); no render machinery here.
  */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -129,7 +131,8 @@ function section(
       useWorkspaces={sel => sel(hostState(host.workspaces ?? []))}
       actions={{ ...injected, ...overrides }}
       t={t}
-      wide={false}
+      wide={true}
+      expandSidebar={vi.fn()}
     />
   ))
 }
@@ -178,15 +181,39 @@ function dropAt(target: HTMLElement, half: 'before' | 'after'): void {
 describe('CollabSection', () => {
   it('renders nothing while the collab surface is absent', () => {
     section(readyState({ availability: 'hidden' }))
-    expect(screen.queryByText('Private Workspaces')).toBeNull()
+    expect(screen.queryByText('Workspaces')).toBeNull()
   })
 
-  it('renders the section header with search, view options, and add workspace', () => {
+  it('renders as the sidebar workspace section with search, view options, and add workspace', () => {
     section(readyState())
-    expect(screen.getByText('Private Workspaces')).toBeTruthy()
+    // The block is an ARIA group labeled by its title — the sole occupant of
+    // the sidebar's Workspaces seat (the local browsing region is gone).
+    expect(screen.getByRole('group', { name: 'Workspaces' })).toBeTruthy()
+    expect(screen.getByText('Workspaces')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Search' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'View options' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '＋ New workspace' })).toBeTruthy()
+  })
+
+  it('collapsed rail keeps only the search control that expands the sidebar', () => {
+    const expandSidebar = vi.fn()
+    render((
+      <CollabSection
+        useCollabWorkspaces={sel => sel(readyState())}
+        useSessions={sel => sel(sessionState([]))}
+        useWorkspaces={sel => sel(hostState([]))}
+        actions={actions()}
+        t={t}
+        wide={false}
+        expandSidebar={expandSidebar}
+      />
+    ))
+    // The wide body is not rendered at all in the rail: the only search
+    // control present is the rail one, and clicking it requests the wide flip.
+    expect(screen.getByRole('button', { name: 'Search' })).toBeTruthy()
+    expect(screen.queryByText('Alpha')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+    expect(expandSidebar).toHaveBeenCalledTimes(1)
   })
 
   it('lists the member workspaces with their sessions inline and opens on click', () => {
@@ -1091,7 +1118,7 @@ describe('CollabSection', () => {
     fireEvent.change(input, { target: { value: 'zzz' } })
     expect(screen.getByText('No matching collaborative workspaces')).toBeTruthy()
     fireEvent.keyDown(input, { key: 'Escape' })
-    expect(screen.getByText('Private Workspaces')).toBeTruthy()
+    expect(screen.getByText('Workspaces')).toBeTruthy()
     expect(screen.queryByText('No matching collaborative workspaces')).toBeNull()
   })
 
@@ -1202,7 +1229,8 @@ describe('CollabSection', () => {
         useWorkspaces={sel => sel(hostState([]))}
         actions={actions()}
         t={t}
-        wide={false}
+        wide={true}
+        expandSidebar={vi.fn()}
       />
     ))
     expect(screen.queryByRole('button', { name: '＋ New workspace' })).toBeNull()
@@ -1215,7 +1243,8 @@ describe('CollabSection', () => {
         useWorkspaces={sel => sel(hostState([]))}
         actions={actions()}
         t={t}
-        wide={false}
+        wide={true}
+        expandSidebar={vi.fn()}
       />
     ))
     expect(screen.queryByRole('button', { name: '＋ New workspace' })).not.toBeNull()

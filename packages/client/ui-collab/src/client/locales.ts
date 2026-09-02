@@ -6,7 +6,7 @@ export const NS = 'collab.ui'
 /** Simplified Chinese dictionary (the key-set source of truth). */
 export const zh = {
   workspaces: '工作台',
-  title: '私有工作区',
+  title: '工作区',
   close: '关闭',
   empty: '还没有工作区',
   members: '成员',
@@ -100,7 +100,7 @@ export const zh = {
 /** English dictionary (same key set). */
 export const en: Record<CollabKey, string> = {
   workspaces: 'Workspaces',
-  title: 'Private Workspaces',
+  title: 'Workspaces',
   close: 'Close',
   empty: 'No workspaces yet',
   members: 'Members',

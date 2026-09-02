@@ -93,7 +93,7 @@ describe('WorkspacesPanel', () => {
   it('lists the member workspaces with their role and member count', () => {
     panel(readyState())
     expect(screen.getByRole('dialog')).toBeTruthy()
-    expect(screen.getByText('Private Workspaces')).toBeTruthy()
+    expect(screen.getByText('Workspaces')).toBeTruthy()
     expect(screen.getByText('Alpha')).toBeTruthy()
     expect(screen.getByText('Admin')).toBeTruthy()
     expect(screen.getByText('2 members')).toBeTruthy()

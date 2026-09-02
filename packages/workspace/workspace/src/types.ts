@@ -53,8 +53,8 @@ export interface Workspace {
   /**
    * Collab-origin marker: present exactly when this workspace is a Host mount
    * of a collaborative workspace, carrying that collab workspace's id. Local
-   * workspaces over arbitrary directories have none. Presence lets browsing
-   * surfaces keep collab mounts out of the local section.
+   * workspaces over arbitrary directories have none. Collab surfaces match
+   * the mounted Host workspace back to its collab workspace through it.
    */
   readonly collab: { workspaceId: string } | undefined
 

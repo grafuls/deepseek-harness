@@ -1,14 +1,12 @@
 /**
- * ui-workspace contracts. Two registrations share this package:
+ * ui-workspace contracts. One registration shares this package:
  *
- * - WorkspaceBrowser fills the sidebar shell's `sidebar.workspaces` hole —
- *   the whole browsing region (section header, search, grouped/flat session
- *   list, workspace dialogs). It registers this package's viewing store and
- *   consumes the shell's two-fact owner share (wide / expandSidebar).
  * - WorkspacePicker fills the conversation empty-state hole (menu + error
- *   dialog shared with the browser).
+ *   dialog). The sidebar's `sidebar.workspaces` Workspaces seat is no longer
+ *   this package's: the collab workspaces section (ui-collab) owns it, and the
+ *   local browsing region was removed from the sidebar.
  *
- * Each registration also declares one **directory-flow hole** (`single`
+ * The picker registration declares one **directory-flow hole** (`single`
  * kind): the slot a composed picker package's client half fills with its
  * picking interaction — a renderless native-chooser driver or an in-app
  * browsing dialog. ui-workspace owns the trigger (the "Add workspace…"
@@ -18,20 +16,18 @@
  * including creating a new directory to hand back. That occupant-owned
  * creation is why adding a workspace has a single route: an unoccupied hole
  * leaves the surface with no add affordance at all.
- * Two holes exist because the two menu surfaces are independent slot entries
- * and a hole has exactly one declaring entry — they carry the same owner
- * contract and the same occupant.
+ * The `sidebar.workspaces.directoryFlow` hole belonged to the retired sidebar
+ * browsing region: it stays declared for the picker packages' shared type
+ * chain, and its occupant never renders because nothing mounts that hole
+ * anymore (the sidebar shows the collab Workspaces section).
  */
-import type { HostDescriptionSource } from '@deepseek-ai/dsh-client-connection/client'
-import type { HostObservable, PropsHooks, PropsLocale, PropsRenderSlots, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
+import type { HostObservable, PropsHooks, PropsLocale, PropsRenderSlots, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pull the owner SlotMap merges into programs that resolve the
 // runtime shares below.
-import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {
-  SessionId, SessionSearchResultItem, WorkspaceId, WorkspaceView,
+  WorkspaceView,
 } from '@deepseek-ai/dsh-client-runtime/client'
-import type { createWorkspaceViewStore } from '../stores.ts'
 
 /**
  * Owner share of the directory-flow holes: the complete conversation between
@@ -51,24 +47,12 @@ export interface DirectoryFlowOwnerProps {
   onError: (message: string) => void
 }
 
-/**
- * Owner share of the collab section hole under the browsing region: the
- * column display state, so the occupant can collapse to a rail
- * representation (the owner already gates the outlet to wide columns).
- */
-export interface SidebarCollabOwnerProps {
-  /** Whether the sidebar renders wide content (false = 56px rail). */
-  wide: boolean
-}
-
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {
     /** Directory-flow hole under the conversation empty-state picker (declared by the WorkspacePicker entry). */
     'conversation.hero.workspace.directoryFlow': { kind: 'single'; scope: 'root'; owner: DirectoryFlowOwnerProps }
-    /** Directory-flow hole under the sidebar browsing region (declared by the WorkspaceBrowser entry). */
+    /** Directory-flow slot of the retired sidebar browsing region (type-only: kept for the picker packages' shared chain; nothing mounts it). */
     'sidebar.workspaces.directoryFlow': { kind: 'single'; scope: 'root'; owner: DirectoryFlowOwnerProps }
-    /** Collaborative-workspaces section under the sidebar browsing region (declared by the WorkspaceBrowser entry). */
-    'sidebar.workspaces.collab': { kind: 'single'; scope: 'root'; owner: SidebarCollabOwnerProps }
   }
 }
 
@@ -95,72 +79,6 @@ export type DirectoryPickingInjected = {
 export type DirectoryPickingHooks = PropsHooks<DirectoryPickingInjected['hooks']>
 
 /**
- * Browser-private injected share (arrives via the register inject factory).
- * Data reads use the global framework hooks; these are the Host actions the
- * browsing region drives.
- */
-export type WorkspaceBrowserInjected = {
-  hooks: DirectoryPickingInjected['hooks'] & {
-    /** Current generation's Host description, bound by the slot renderer. */
-    hostDescription: HostDescriptionSource
-  }
-  /**
-   * Start a New Session in a Workspace: reuse-or-create its blank session and
-   * open it; without an explicit workspace, inherit the current Session
-   * Workspace, then the recent Workspace, or clear into the New Session view.
-   */
-  startSession: (workspaceId?: WorkspaceId) => void
-  /** Open a real Session. */
-  open: (sessionId: SessionId) => void
-  /**
-   * Search current visible conversation messages. The Host fixes the result
-   * bound; `hasMore` means the query needs narrowing.
-   */
-  searchSessions: (
-    query: string,
-    signal: AbortSignal,
-  ) => Promise<{ items: readonly SessionSearchResultItem[]; hasMore: boolean }>
-  /** Maximum number of merged rows rendered for one search. */
-  searchResultLimit: number
-  /** Rename a Session (explicit user title; resolves on host acceptance). */
-  renameSession: (sessionId: SessionId, title: string) => Promise<void>
-  /** Fork a Session at its last completed turn and open the child. */
-  forkSession: (sessionId: SessionId) => void
-  /** Rename a Host Workspace (rejects on name conflict; resolves on durability). */
-  renameWorkspace: (workspaceId: WorkspaceId, title: string) => Promise<void>
-  /** Delete only a Host Workspace registration; directory and Session logs remain. */
-  deleteWorkspace: (workspaceId: WorkspaceId) => Promise<void>
-  /**
-   * Reorder a Workspace in the durable registry display order.
-   * Omitted anchor appends to the end.
-   */
-  insertWorkspaceBefore: (workspaceId: WorkspaceId, beforeWorkspaceId?: WorkspaceId) => Promise<void>
-  /**
-   * Archive a Session into the registry-global set: hidden from grouping
-   * surfaces, log and accounting slot retained. Archiving the current
-   * session clears the selection into the New Session view state.
-   */
-  archiveSession: (sessionId: SessionId) => Promise<void>
-  /**
-   * Reorder a session inside its Workspace account (DOM-insertBefore
-   * semantics: omitted anchor appends to the end). The view refreshes from
-   * the Host response/changed frame; failures leave the order unchanged.
-   */
-  insertSessionBefore: (workspaceId: WorkspaceId, sessionId: SessionId, beforeSessionId?: SessionId) => Promise<void>
-  /** Adopt a picked host directory as a real Workspace before targeting a Session. */
-  createWorkspace: (input: { path: string }) => Promise<WorkspaceView>
-}
-
-/** Full browser props: shell owner share + viewing store + injected actions + the locale seat. */
-export type WorkspaceBrowserProps =
-  PropsRuntime<'sidebar.workspaces'>
-  & PropsRenderSlots<'sidebar.workspaces.directoryFlow' | 'sidebar.workspaces.collab'>
-  & PropsStore<ReturnType<typeof createWorkspaceViewStore>>
-  & Omit<WorkspaceBrowserInjected, 'hooks'>
-  & PropsHooks<WorkspaceBrowserInjected['hooks']>
-  & PropsLocale<'workspace'>
-
-/**
  * Picker-private injected share. Pick semantics remain in the owner's onPick
  * callback; this callback creates only the real Host Workspace. A type alias
  * supplies the implicit index signature required by the registry.
@@ -172,8 +90,8 @@ export type WorkspacePickerInjected = DirectoryPickingInjected & {
 
 /**
  * Full picker props: the owner share plus the creation callback and the
- * locale seat. The two picker holes (blank-session hero / New-Session view)
- * share one owner currency, so one composed type serves both registrations.
+ * locale seat. The picker hole (blank-session hero / New-Session view)
+ * carries one owner currency, so one composed type serves the registration.
  */
 export type WorkspacePickerProps =
   PropsRuntime<'conversation.hero.workspace'>

@@ -1,21 +1,22 @@
 /**
  * Collab workspaces manager, browser half. Owns one shared workspaces store
  * over the Connection RPC channel, and mounts two surfaces: the collab
- * section under the sidebar's Workspaces browsing region and the manager
- * panel in the layout's shell overlay. Both render nothing while the collab
+ * section filling the sidebar's Workspaces seat (it replaced the local
+ * browsing region as the sidebar's workspace surface) and the manager panel
+ * in the layout's shell overlay. Both render nothing while the collab
  * surface is absent (a hidden availability verdict), so a single-user web
- * install is unchanged; the collab API gateway's `/api` fence remains the
- * enforcement point.
+ * install's sidebar workspace seat is empty; the collab API gateway's `/api`
+ * fence remains the enforcement point.
  */
 
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type { SettingsScope, SettingsScopeSpec } from '@deepseek-ai/dsh-client-runtime/client'
 import type { SessionId, WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
-// Type-only: pulls the ui-layout and ui-workspace SlotMap augmentations
-// (shell.overlay, sidebar.workspaces.collab) into this program; the client
-// bundle emits no request for either.
+// Type-only: pulls the ui-layout and ui-sidebar SlotMap augmentations
+// (shell.overlay, sidebar.workspaces) into this program; the client bundle
+// emits no request for either.
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
-import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
+import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 // Type-only: pulls the settings shell's SlotMap merge and the settingsScope
 // Context merge (settings.section, ctx.settingsScope) into this program.
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
@@ -132,12 +133,11 @@ export function apply(ctx: ClientContext): void {
     // show up in an already-open page without requiring a reload.
     controller.startAutoRefresh()
     // Both surfaces share one store handle; each waits on its slot's
-    // declaration (sidebar.workspaces.collab from ui-workspace,
-    // shell.overlay from ui-layout) so apply order across those owners is
-    // unconstrained.
+    // declaration (sidebar.workspaces from ui-sidebar, shell.overlay from
+    // ui-layout) so apply order across those owners is unconstrained.
     const disposers = [
-      ctx.slots.inject('sidebar.workspaces.collab', () => ctx.slots.register({
-        name: 'sidebar.workspaces.collab',
+      ctx.slots.inject('sidebar.workspaces', () => ctx.slots.register({
+        name: 'sidebar.workspaces',
         locale: NS,
         inject: injected,
       }, CollabSection)),

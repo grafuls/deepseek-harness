@@ -71,7 +71,7 @@ async function bench(extraChildren: Record<string, unknown> = {}) {
       name: 'root',
       children: {
         'shell.overlay': { kind: 'list', scope: 'root' },
-        'sidebar.workspaces.collab': { kind: 'single', scope: 'root' },
+        'sidebar.workspaces': { kind: 'single', scope: 'root' },
         ...extraChildren,
       },
     } as never,
@@ -125,7 +125,7 @@ async function benchHidden() {
   ctx.provide('locale', locale)
   const slots = ctx.get('slots') as SlotRegistry
   slots.register(
-    { name: 'root', children: { 'shell.overlay': { kind: 'list', scope: 'root' }, 'sidebar.workspaces.collab': { kind: 'single', scope: 'root' } } } as never,
+    { name: 'root', children: { 'shell.overlay': { kind: 'list', scope: 'root' }, 'sidebar.workspaces': { kind: 'single', scope: 'root' } } } as never,
     () => null,
   )
   return { ctx, slots }
@@ -144,12 +144,12 @@ describe('ui-collab client plugin', () => {
     const { ctx, slots } = await bench()
     const fiber = ctx.plugin({ inject: [...inject], apply })
     await fiber.await()
-    expect(slots.entries('sidebar.workspaces.collab')).toHaveLength(1)
+    expect(slots.entries('sidebar.workspaces')).toHaveLength(1)
     expect(slots.entries('shell.overlay')).toHaveLength(1)
-    expect(slots.entries('sidebar.workspaces.collab')[0]!.component).toBe(CollabSection)
+    expect(slots.entries('sidebar.workspaces')[0]!.component).toBe(CollabSection)
     expect(slots.entries('shell.overlay')[0]!.component).toBe(WorkspacesPanel)
     await fiber.dispose()
-    expect(slots.entries('sidebar.workspaces.collab')).toHaveLength(0)
+    expect(slots.entries('sidebar.workspaces')).toHaveLength(0)
     expect(slots.entries('shell.overlay')).toHaveLength(0)
   })
 
@@ -199,10 +199,10 @@ describe('ui-collab client plugin', () => {
     const fiber = ctx.plugin({ inject: [...inject], apply })
     await fiber.await()
     // Copy rides the standard locale seat, not the business face.
-    expect(slots.entries('sidebar.workspaces.collab')[0]!.locale).toBe(NS)
+    expect(slots.entries('sidebar.workspaces')[0]!.locale).toBe(NS)
     expect(slots.entries('shell.overlay')[0]!.locale).toBe(NS)
     const t = locale.bind(NS)
-    expect(t('title')).toBe('私有工作区')
+    expect(t('title')).toBe('工作区')
     expect(t('memberCount', { count: '3' })).toBe('3 名成员')
     locale.setLocale('en')
     expect(t('workspaces')).toBe('Workspaces')
@@ -216,7 +216,7 @@ describe('ui-collab client plugin', () => {
     await fiber.await()
     await new Promise(resolve => setImmediate(resolve))
     expect(seen).toEqual(['collab/auth.status', 'collab/workspace.list', 'collab/workspace.myInvitations'])
-    const section = slots.entries('sidebar.workspaces.collab')[0]!
+    const section = slots.entries('sidebar.workspaces')[0]!
     const face = (section.inject as unknown as () => CollabWorkspacesInjected)()
     expect(face.hooks.collabWorkspaces.getSnapshot().availability).toBe('ready')
     await fiber.dispose()
@@ -227,7 +227,7 @@ describe('ui-collab client plugin', () => {
     const fiber = ctx.plugin({ inject: [...inject], apply })
     await fiber.await()
     await new Promise(resolve => setImmediate(resolve))
-    const entry = slots.entries('sidebar.workspaces.collab')[0]!
+    const entry = slots.entries('sidebar.workspaces')[0]!
     const face = (entry.inject as unknown as () => CollabWorkspacesInjected)()
     const store = face.hooks.collabWorkspaces
     face.actions.openPanel()
@@ -290,7 +290,7 @@ describe('ui-collab client plugin', () => {
     const fiber = ctx.plugin({ inject: [...inject], apply })
     await fiber.await()
     await new Promise(resolve => setImmediate(resolve))
-    const entry = slots.entries('sidebar.workspaces.collab')[0]!
+    const entry = slots.entries('sidebar.workspaces')[0]!
     const face = (entry.inject as unknown as () => CollabWorkspacesInjected)()
     // A bound session renames through its own face.
     await face.actions.renameSession('s1' as SessionId, 'Research log')
@@ -336,7 +336,7 @@ describe('ui-collab client plugin', () => {
     const fiber = ctx.plugin({ inject: [...inject], apply })
     await fiber.await()
     await new Promise(resolve => setImmediate(resolve))
-    const section = slots.entries('sidebar.workspaces.collab')[0]!
+    const section = slots.entries('sidebar.workspaces')[0]!
     const face = (section.inject as unknown as () => CollabWorkspacesInjected)()
     expect(face.hooks.collabWorkspaces.getSnapshot().availability).toBe('hidden')
     await fiber.dispose()

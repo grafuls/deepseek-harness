@@ -16,7 +16,7 @@
 
 ## 线上 API
 
-collab API 拥有在 `/api` 下通过共享连接封装的 `collab/*` JSON-RPC 端点——`workspace.list/get/create/members/dir/invite/invitations/myInvitations/revokeInvitation/join/leave/delete/rename/setMemberRole/removeMember/open`、`users.*` 管理面与 `collab/auth.status` 探测。浏览器端 [ui-auth 登录门](../../packages/client/ui-auth) 在 cookie 授权之前用登录页挡住应用，而 [ui-collab 工作区管理器](../../packages/client/ui-collab) 从侧边栏 Workspaces 列表下方的 collab 区块经同一 RPC 列出、创建、接受发给当前用户的邀请并管理工作区（点一行会打开管理器遮罩查看成员与角色详情）。成员点「打开」会经 `collab/workspace.open` 把 collab 工作区挂载为保留的 `workspaces/<id>` 目录之上的真实主机工作区，并经由运行时 Workspace 面把 GUI 切换进它；主机注册表为每个成员解析到同一个工作区，因此诞生于其中的会话共享该目录。
+collab API 拥有在 `/api` 下通过共享连接封装的 `collab/*` JSON-RPC 端点——`workspace.list/get/create/members/dir/invite/invitations/myInvitations/revokeInvitation/join/leave/delete/rename/setMemberRole/removeMember/open`、`users.*` 管理面与 `collab/auth.status` 探测。浏览器端 [ui-auth 登录门](../../packages/client/ui-auth) 在 cookie 授权之前用登录页挡住应用，而 [ui-collab 工作区管理器](../../packages/client/ui-collab) 从占据侧边栏 Workspaces 席位的 collab 区块经同一 RPC 列出、创建、接受发给当前用户的邀请并管理工作区（点一行会打开管理器遮罩查看成员与角色详情）。成员点「打开」会经 `collab/workspace.open` 把 collab 工作区挂载为保留的 `workspaces/<id>` 目录之上的真实主机工作区，并经由运行时 Workspace 面把 GUI 切换进它；主机注册表为每个成员解析到同一个工作区，因此诞生于其中的会话共享该目录。
 
 ## 已知限制
 

@@ -1,6 +1,7 @@
-// CollabSection: the collaborative-workspaces section that sits right below
-// the sidebar's local Workspaces browsing region. It mirrors that region's
-// format: a section header (title, expanding search, view options, and the
+// CollabSection: the collaborative-workspaces section that fills the sidebar's
+// single Workspaces seat (it replaced the local browsing region as the
+// sidebar's workspace surface). It is a section: a title ("Private
+// Workspaces") plus its own toolbar (expanding search, view options, and the
 // add-workspace button that opens the creation dialog), then the member
 // workspaces as rows. Each collab workspace is mounted in the background on
 // render so its shared sessions (including ones other members created) are
@@ -10,9 +11,10 @@
 // chevron on hover, inline hover-revealed row actions, a status slot and
 // relative time on session rows, and hover cards for both. Shared sessions are
 // read-only, so session rows carry no rename/fork/archive actions. Pending
-// invitations keep their inline accept rows above the list. It renders nothing
-// while the collab surface is absent, so a single-user web install's browsing
-// region is unchanged.
+// invitations keep their inline accept rows above the list. The collapsed rail
+// (wide=false) keeps only a search control that expands the sidebar, mirroring
+// the browsing region's rail. It renders nothing while the collab surface is
+// absent, so a single-user web install's sidebar workspace seat is empty.
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import clsx from 'clsx'
@@ -44,7 +46,7 @@ import css from './CollabSection.module.css'
 /** Composed section props: the inject face + the locale seat + the root-scope standard seats. */
 export type CollabSectionProps = InjectFace<CollabWorkspacesInjected>
   & PropsLocale<typeof NS>
-  & PropsRuntime<'sidebar.workspaces.collab'>
+  & PropsRuntime<'sidebar.workspaces'>
 
 /** Session rows visible per Workspace before the overflow control (mirrors the browsing region). */
 const COLLAPSED_SESSION_LIMIT = 5
@@ -534,13 +536,15 @@ function CollabWorkspaceRow({ workspace, expanded, active, path, menuOpen, onTog
 }
 
 /**
- * Render the collaborative-workspaces section beneath the browsing list while
+ * Render the collaborative-workspaces group beneath the browsing list while
  * the collab surface is ready.
  * @param props - the workspaces store hook, the root-scope session and
  *   workspace seats, plus the collab actions and the locale seat.
- * @returns the section, or null when no collab surface applies.
+ * @returns the group, or null when no collab surface applies.
  */
 export function CollabSection({
+  wide,
+  expandSidebar,
   useCollabWorkspaces, useSessions, useWorkspaces, actions, t,
 }: CollabSectionProps): ReactNode {
   const state = useCollabWorkspaces(current => current)
@@ -557,6 +561,16 @@ export function CollabSection({
   useEffect(() => {
     if (searchExpanded) searchInput.current?.focus({ preventScroll: true })
   }, [searchExpanded])
+
+  // Rail search = expand + land in the search box: the flag arms before the
+  // expand request; once the shell flips wide the input mounts and takes focus.
+  const [searchOnExpand, setSearchOnExpand] = useState(false)
+  useEffect(() => {
+    if (wide && searchOnExpand) {
+      searchInput.current?.focus({ preventScroll: true })
+      setSearchOnExpand(false)
+    }
+  }, [wide, searchOnExpand])
 
   // Outside-click dismissal mirrors the local browser's search: an empty
   // query collapses the capsule when the pointer leaves it.
@@ -804,7 +818,29 @@ export function CollabSection({
   const now = Date.now()
 
   return (
-    <section className={css.root} aria-label={t('title')}>
+    <div role="group" className={clsx(css.root, !wide && css.rail)} aria-label={t('title')}>
+      {/* The collapsed rail keeps search as its own 36px control. */}
+      {!wide && (
+        <div className={css.railSearch}>
+          <Tooltip label={t('search')}>
+            <button
+              type="button"
+              className={css.searchButton}
+              aria-label={t('search')}
+              onClick={() => {
+                setSearchExpanded(true)
+                setSearchOnExpand(true)
+                expandSidebar()
+              }}
+            >
+              <IconSearchOutline16 size={18} />
+            </button>
+          </Tooltip>
+        </div>
+      )}
+      {/* The wide body: section header, invitations, and the scrolling list. */}
+      {wide && (
+        <>
       <div className={css.sectionHeader}>
         <span className={clsx(css.sectionLabel, searchExpanded && css.sectionLabelHidden)}>{t('title')}</span>
         <div className={clsx(css.searchSlot, searchExpanded && css.searchSlotExpanded)}>
@@ -1012,6 +1048,8 @@ export function CollabSection({
             </div>
           )}
       </div>
+        </>
+      )}
 
       {/* The modal portals to document.body, so it can render inside the
           section while the mask covers the whole viewport. */}
@@ -1078,7 +1116,7 @@ export function CollabSection({
         />
         {workspaceRenameError !== null && <div className={css.renameError} role="alert">{workspaceRenameError}</div>}
       </Modal>
-    </section>
+    </div>
   )
 }
 

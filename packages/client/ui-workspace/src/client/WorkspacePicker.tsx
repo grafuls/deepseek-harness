@@ -1,12 +1,12 @@
 /**
  * Workspace pick/add flow. WorkspacePickFlow is the reusable core (menu +
- * path error dialog) consumed directly by WorkspaceBrowser (same package) and
- * wrapped by WorkspacePicker for the conversation empty-state slot
- * registration. Directory picking itself lives in the composed flow package's
- * slot occupant (see the contract module doc): this core only opens the flow,
- * adopts the picked path, and owns the error surface. Adding a workspace has
- * exactly one route — pick a host directory, new or existing — because the
- * occupant's own create-folder affordance already covers creating one.
+ * path error dialog) wrapped by WorkspacePicker for the conversation
+ * empty-state slot registration. Directory picking itself lives in the
+ * composed flow package's slot occupant (see the contract module doc): this
+ * core only opens the flow, adopts the picked path, and owns the error
+ * surface. Adding a workspace has exactly one route — pick a host directory,
+ * new or existing — because the occupant's own create-folder affordance
+ * already covers creating one.
  */
 import type { ReactNode, RefObject } from 'react'
 import { useCallback, useEffect, useState } from 'react'

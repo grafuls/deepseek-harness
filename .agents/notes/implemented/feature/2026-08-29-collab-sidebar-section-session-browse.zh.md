@@ -10,13 +10,13 @@ Status: implemented
 
 ## Decision
 
-现在协作工作区区块像上方浏览区一样浏览每个成员工作区内部的会话，作为其下的一个兄弟区块：
+协作工作区区块把每个成员工作区内的会话作为侧边栏唯一 Workspaces 席位来浏览（它曾镜像的本地浏览区已被移除）：
 
 - **工作区行展开到它们的会话。** 点击工作区行会切换展开其下的会话列表（chevron 加文件夹装饰、`aria-expanded`），不再执行挂载并切换。点击某个会话的行即直接打开它，走运行时 `sessions.open` 面，与进入默认工作区会话的方式一致。
 - **渲染时自动挂载。** 区块首次进入 ready 时，会在后台通过 `collab/workspace.open` 挂载每个成员工作区，并把逐个工作区的失败折叠进 store 的错误横幅。挂载在 Host 注册表中按路径幂等，因此其他成员创建的会话（或此前已挂载的会话）会自动出现；还没有任何会话的工作区会显示本地化的空态提示。
-- **collab 来源的工作区留在本地浏览区之外。** 一次 collab 挂载会创建一个 Host 工作区，其记录带 `collab: { workspaceId }` 标记（`create(path, title?, collabWorkspaceId)` 的第三个参数会对其幂等地重新盖印）。默认 Workspaces 浏览区把带该标记的工作区、以及归属到它们名下的会话，从所有分组视图——分组列表、平铺列表与内容搜索——中过滤掉，因此 collab 会话只出现在 collab 区块。
+- **collab 来源的工作区带有持久标记。** 一次 collab 挂载会创建一个 Host 工作区，其记录带 `collab: { workspaceId }` 标记（`create(path, title?, collabWorkspaceId)` 的第三个参数会对其幂等地重新盖印）。已没有本地浏览区需要过滤：collab 会话出现在「工作区」区块中，而 hero picker 一如既往地列出 Host 工作区（含 collab 挂载）。浏览区曾经的「仅本地」过滤及其隐藏会话集合已随该区域一并删除。
 - **视图选项现在作用于会话。** 分组模式把每个工作区的会话嵌套在其行下；平铺模式跨工作区列出每个 collab 会话一次（去重）；`updated` 排序按会话自身的最近活动倒序，`manual` 保持工作区／服务器顺序。
-- **空态。** 完全没有工作区（且没有邀请）时显示浏览区的空态文案；有工作区但尚未有会话时显示「暂无会话」提示；查询无匹配时在两种视图模式下都显示无匹配文案。
+- **空态。** 完全没有工作区（且没有邀请）时显示区块的空态文案；有工作区但尚未有会话时显示「暂无会话」提示；查询无匹配时在两种视图模式下都显示无匹配文案。
 
 ## Alternatives considered
 
@@ -27,13 +27,15 @@ Status: implemented
 
 ## Consequences
 
-- collab 成员在侧边栏中并排看到：默认 Workspaces 浏览区（仅本地工作区）与 Collab 区块（自己的工作区及其中会话），全球设置入口单独留在下方。
+- collab 成员把「工作区」区块视为侧边栏的 Workspaces 席位，其工作区行展开到会话；本地工作区通过 hero picker 与「新会话」流程触达，全球设置入口单独留在下方。
 - 标记持久保存在 Host 工作区记录中，因此每个成员都解析到同一个 collab 归属的工作区及其会话账目；变更之前不带标记的记录继续可用，重复挂载会对未标记或重建的记录重新盖印。
-- 默认浏览区的「仅本地」行为通过把一张隐藏会话集合（由 collab 挂载推导）穿进既有树推导中得以保留；服务端查询与 collab 会话端点均无变化。
-- `collab/workspace.open` 现在会在区块每次渲染（ready 可用性效应）时自动发出，而不只是来自一次显式点击；逐个工作区的失败都限定在横幅内，一个失败的工作区不会阻塞其余挂载。
+- 默认浏览区的「仅本地」过滤已随浏览区一并删除：由于侧边栏不再渲染本地列表，不再有隐藏会话集合穿进树派生；collab 会话出现在「工作区」区块。
+- `collab/workspace.open` 现在会在分组每次渲染（ready 可用性效应）时自动发出，而不只是来自一次显式点击；逐个工作区的失败都限定在横幅内，一个失败的工作区不会阻塞其余挂载。
 - 早期 section-format 记录中的行级交互被取代：行现在展开而非切换，会话才是打开入口。
 
 ## Related
 
-- [collab sidebar section mirrors the Workspaces browsing region](2026-08-29-collab-sidebar-section-format.zh.md) —— 本记录建立在其上的格式与注册决策；其「行即打开」的交互在此被取代。
+- [侧边栏的工作区席位只保留「工作区」区块](2026-09-01-collab-sidebar-workspaces-private-section.zh.md) —— collab 区块占据侧边栏唯一的 Workspaces 席位；它曾镜像的浏览区已被移除。
 - [collab repo-backed workspaces](2026-08-29-collab-repo-backed-workspaces.zh.md) —— 本区块所浏览工作区背后的 collab API 挂载与克隆行为。
+- [collab 侧边栏区块镜像 Workspaces 浏览区的格式](../../archived/feature/2026-08-29-collab-sidebar-section-format.md) —— 该区块保留的格式（已归档的历史；它曾镜像的区域已不存在）。
+- [collab 侧边栏把公共与私有工作区并为一个区块](../../archived/feature/2026-09-01-collab-sidebar-one-section-two-groups.md) —— 已被取代的两分组框架（已归档的历史）。

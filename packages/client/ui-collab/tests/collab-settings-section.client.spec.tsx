@@ -128,8 +128,129 @@ describe('CollabSettingsSection', () => {
     await Promise.resolve()
     await Promise.resolve()
     rerender(<CollabSettingsSection useCollabSettings={sel => sel(store.getSnapshot())} controller={controller} t={t} />)
-    expect(calls).toEqual([{ field: 'cloneDir', value: '/data/other' }])
+    // Save persists the directory and clears the untouched depth back to full history.
+    expect(calls).toEqual([
+      { field: 'cloneDir', value: '/data/other' },
+      { field: 'cloneDepth', value: undefined },
+    ])
     expect(screen.getByText('Saved')).toBeTruthy()
+  })
+
+  it('persists a drafted clone depth alongside the directory', async () => {
+    const scope = scopeWith({ cloneDir: '/data/clones', cloneDepth: 3 })
+    const store = createCollabSettingsStore()
+    const controller = new CollabSettingsController(scope.scope, store)
+    const { rerender } = render(<CollabSettingsSection useCollabSettings={sel => sel(store.getSnapshot())} controller={controller} t={t} />)
+    const depth = screen.getByRole<HTMLInputElement>('spinbutton')
+    expect(depth.value).toBe('3')
+    fireEvent.change(depth, { target: { value: '7' } })
+    rerender(<CollabSettingsSection useCollabSettings={sel => sel(store.getSnapshot())} controller={controller} t={t} />)
+    fireEvent.click(screen.getByText('Save'))
+    await Promise.resolve()
+    await Promise.resolve()
+    rerender(<CollabSettingsSection useCollabSettings={sel => sel(store.getSnapshot())} controller={controller} t={t} />)
+    expect(scope.calls).toEqual([
+      { field: 'cloneDir', value: '/data/clones' },
+      { field: 'cloneDepth', value: 7 },
+    ])
+    expect(screen.getByText('Saved')).toBeTruthy()
+  })
+
+  it('keeps Save disabled while the drafted depth is not a positive integer', () => {
+    const { controller, store } = ready()
+    const { rerender } = render(<CollabSettingsSection useCollabSettings={sel => sel(store.getSnapshot())} controller={controller} t={t} />)
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '2.5' } })
+    rerender(<CollabSettingsSection useCollabSettings={sel => sel(store.getSnapshot())} controller={controller} t={t} />)
+    expect(screen.getByText('Save').getAttribute('disabled')).not.toBeNull()
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '0' } })
+    rerender(<CollabSettingsSection useCollabSettings={sel => sel(store.getSnapshot())} controller={controller} t={t} />)
+    expect(screen.getByText('Save').getAttribute('disabled')).not.toBeNull()
+  })
+
+  it('saves from the Enter key on the depth field', async () => {
+    const scope = scopeWith({ cloneDir: '/data/clones', cloneDepth: 2 })
+    const store = createCollabSettingsStore()
+    const controller = new CollabSettingsController(scope.scope, store)
+    const { rerender } = render(<CollabSettingsSection useCollabSettings={sel => sel(store.getSnapshot())} controller={controller} t={t} />)
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '6' } })
+    rerender(<CollabSettingsSection useCollabSettings={sel => sel(store.getSnapshot())} controller={controller} t={t} />)
+    fireEvent.keyDown(screen.getByRole('spinbutton'), { key: 'Enter' })
+    await Promise.resolve()
+    await Promise.resolve()
+    rerender(<CollabSettingsSection useCollabSettings={sel => sel(store.getSnapshot())} controller={controller} t={t} />)
+    expect(scope.calls).toEqual([
+      { field: 'cloneDir', value: '/data/clones' },
+      { field: 'cloneDepth', value: 6 },
+    ])
+    expect(screen.getByText('Saved')).toBeTruthy()
+  })
+
+  it('saves from the depth-field Enter only when the draft is dirty, valid, and idle', async () => {
+    const holder = heldScope()
+    const store = createCollabSettingsStore()
+    const controller = new CollabSettingsController(holder.scope, store)
+    const { rerender } = render(<CollabSettingsSection useCollabSettings={sel => sel(store.getSnapshot())} controller={controller} t={t} />)
+    const depth = screen.getByRole('spinbutton')
+    // Clean depth form: Enter short-circuits before any write.
+    fireEvent.keyDown(depth, { key: 'Enter' })
+    expect(holder.calls).toEqual([])
+    // Non-Enter key on a dirty depth: the first guard term is false.
+    fireEvent.change(depth, { target: { value: '6' } })
+    rerender(<CollabSettingsSection useCollabSettings={sel => sel(store.getSnapshot())} controller={controller} t={t} />)
+    fireEvent.keyDown(depth, { key: 'x' })
+    expect(holder.calls).toEqual([])
+    // Invalid depth on a dirty form: the Enter is refused.
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '/data/other' } })
+    rerender(<CollabSettingsSection useCollabSettings={sel => sel(store.getSnapshot())} controller={controller} t={t} />)
+    fireEvent.change(depth, { target: { value: '2.5' } })
+    rerender(<CollabSettingsSection useCollabSettings={sel => sel(store.getSnapshot())} controller={controller} t={t} />)
+    fireEvent.keyDown(depth, { key: 'Enter' })
+    expect(holder.calls).toEqual([])
+    // Dirty, valid, idle: the Enter starts the save; a second Enter while the
+    // save is in flight is refused.
+    fireEvent.change(depth, { target: { value: '6' } })
+    rerender(<CollabSettingsSection useCollabSettings={sel => sel(store.getSnapshot())} controller={controller} t={t} />)
+    fireEvent.keyDown(depth, { key: 'Enter' })
+    expect(holder.calls).toEqual([{ field: 'cloneDir', value: '/data/other' }])
+    fireEvent.keyDown(depth, { key: 'Enter' })
+    expect(holder.calls).toHaveLength(1)
+    holder.release()
+    await waitFor(() => { expect(screen.getByText('Save')).toBeTruthy() })
+  })
+
+  it('clears the depth to full history while saving a directory edit', async () => {
+    const scope = scopeWith({ cloneDir: '/data/clones', cloneDepth: 3 })
+    const store = createCollabSettingsStore()
+    const controller = new CollabSettingsController(scope.scope, store)
+    const { rerender } = render(<CollabSettingsSection useCollabSettings={sel => sel(store.getSnapshot())} controller={controller} t={t} />)
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '/opt/repos' } })
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '' } })
+    rerender(<CollabSettingsSection useCollabSettings={sel => sel(store.getSnapshot())} controller={controller} t={t} />)
+    // The depth draft reads as empty (full history), so Save stays enabled by the directory edit.
+    expect(screen.getByText('Save').getAttribute('disabled')).toBeNull()
+    fireEvent.click(screen.getByText('Save'))
+    await Promise.resolve()
+    await Promise.resolve()
+    rerender(<CollabSettingsSection useCollabSettings={sel => sel(store.getSnapshot())} controller={controller} t={t} />)
+    expect(scope.calls).toEqual([
+      { field: 'cloneDir', value: '/opt/repos' },
+      { field: 'cloneDepth', value: undefined },
+    ])
+  })
+
+  it('resets both fields back to the persisted values', () => {
+    const scope = scopeWith({ cloneDir: '/data/clones', cloneDepth: 3 })
+    const store = createCollabSettingsStore()
+    const controller = new CollabSettingsController(scope.scope, store)
+    const { rerender } = render(<CollabSettingsSection useCollabSettings={sel => sel(store.getSnapshot())} controller={controller} t={t} />)
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '/elsewhere' } })
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '9' } })
+    rerender(<CollabSettingsSection useCollabSettings={sel => sel(store.getSnapshot())} controller={controller} t={t} />)
+    fireEvent.click(screen.getByText('Reset'))
+    rerender(<CollabSettingsSection useCollabSettings={sel => sel(store.getSnapshot())} controller={controller} t={t} />)
+    expect(screen.getByRole<HTMLInputElement>('textbox').value).toBe('/data/clones')
+    expect(screen.getByRole<HTMLInputElement>('spinbutton').value).toBe('3')
+    expect(scope.calls).toEqual([])
   })
 
   it('resets the draft to the persisted value and disables the actions', () => {

@@ -89,6 +89,8 @@ async function bench(extraChildren: Record<string, unknown> = {}) {
       { ok: true, value: { pushed: false, upToDate: false, branch: 'topic', base: 'main', localSha: 'l1', remote: 'https://github.com/acme/repo.git' } },
       { ok: true, value: { pushed: true, upToDate: false, branch: 'topic', base: 'main', localSha: 'l1', remoteSha: 'r1', remote: 'https://github.com/acme/repo.git' } },
     ],
+    // The sync lane fetches the origin once.
+    'collab/workspace.fetch': [{ ok: true, value: { fetched: true } }],
     // Rename resolves once then refuses: the dialog keeps failures open.
     'collab/workspace.rename': [
       { ok: true, value: { id: 'w1', name: 'Eng' } },
@@ -286,8 +288,10 @@ describe('ui-collab client plugin', () => {
     await vi.waitFor(() => { expect(store.getSnapshot().working).toBe(false) })
     void face.actions.previewPush('w1', 'topic')
     void face.actions.pushBranch('w1', 'topic')
+    void face.actions.syncWorkspace('w1')
     await vi.waitFor(() => { expect(store.getSnapshot().working).toBe(false) })
     expect(seen).toContain('collab/workspace.push')
+    expect(seen).toContain('collab/workspace.fetch')
     await fiber.dispose()
   })
 

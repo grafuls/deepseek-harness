@@ -725,6 +725,22 @@ describe('CollabWorkspacesController push', () => {
   })
 })
 
+describe('CollabWorkspacesController sync', () => {
+  it('syncs through the fetch endpoint and folds failures into a banner', async () => {
+    const { store, controller, seen, seenPayloads } = harness({
+      'collab/workspace.fetch': [ok({ fetched: true }), refusal('collab-bad-request')],
+    })
+    store.set({ ...store.getSnapshot(), workspaces: [WORKSPACE] })
+    await expect(controller.syncWorkspace('w1')).resolves.toEqual({ fetched: true })
+    expect(seen).toEqual(['collab/workspace.fetch'])
+    expect(seenPayloads).toContainEqual({ workspaceId: 'w1' })
+    expect(store.getSnapshot().error).toBeUndefined()
+    await expect(controller.syncWorkspace('w1')).resolves.toBeUndefined()
+    expect(store.getSnapshot().error).toBe('请求无效，请检查输入')
+    expect(store.getSnapshot().working).toBe(false)
+  })
+})
+
 describe('CollabWorkspacesController reorderSession', () => {
   it('moves a session through the runtime port with its anchor', async () => {
     const { controller, reorderSession } = harness()

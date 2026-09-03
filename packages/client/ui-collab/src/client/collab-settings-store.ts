@@ -20,6 +20,8 @@ export const COLLAB_SETTINGS_NAMESPACE = 'collab'
 export interface CollabSettingsValue {
   /** Default directory for cloning repositories that back new workspaces; empty uses the collab data root. */
   cloneDir?: string
+  /** Optional shallow-clone depth for repository bootstraps; absent clones full history. */
+  cloneDepth?: number
 }
 
 /**
@@ -40,9 +42,13 @@ export interface CollabSettingsState {
   status: 'loading' | 'ready' | 'unavailable'
   /** Persisted clone directory (`''` means the collab data root). */
   cloneDir: string
-  /** Current input text, including unsaved edits. */
+  /** Current clone-directory input text, including unsaved edits. */
   draft: string
-  /** True right after a successful save, until the draft changes again. */
+  /** Persisted shallow-clone depth (`0` means full history). */
+  cloneDepth: number
+  /** Current clone-depth input text (`''` means full history). */
+  depthDraft: string
+  /** True right after a successful save, until a draft changes again. */
   saved: boolean
 }
 
@@ -51,6 +57,8 @@ export const COLLAB_SETTINGS_INITIAL: CollabSettingsState = {
   status: 'loading',
   cloneDir: '',
   draft: '',
+  cloneDepth: 0,
+  depthDraft: '',
   saved: false,
 }
 
@@ -101,11 +109,21 @@ export class CollabSettingsController {
       return
     }
     const cloneDir = snapshot.value?.cloneDir ?? ''
+    const depth = snapshot.value?.cloneDepth
+    const cloneDepth = typeof depth === 'number' && Number.isInteger(depth) && depth >= 1 ? depth : 0
     this.store.update((state) => {
+      // Re-seed a draft only while it still mirrors the previous persisted value
+      // (or on first derivation), never when the user edited or cleared it:
+      // an empty draft means "use the default", not "no draft yet".
+      const previousDir = state.cloneDir
+      const previousDepth = state.cloneDepth === 0 ? '' : String(state.cloneDepth)
+      const persisted = cloneDepth === 0 ? '' : String(cloneDepth)
       state.status = 'ready'
       state.cloneDir = cloneDir
+      state.cloneDepth = cloneDepth
       state.saved = false
-      if (state.draft === state.cloneDir || state.draft === '') state.draft = cloneDir
+      if (state.draft === previousDir) state.draft = cloneDir
+      if (state.depthDraft === previousDepth) state.depthDraft = persisted
     })
   }
 
@@ -121,6 +139,17 @@ export class CollabSettingsController {
   }
 
   /**
+   * Update the clone-depth input draft and mark the section dirty.
+   * @param depth - the raw input text (`''` means full history).
+   */
+  setDraftDepth(depth: string): void {
+    this.store.update((state) => {
+      state.depthDraft = depth
+      state.saved = false
+    })
+  }
+
+  /**
    * Persist the current draft as the clone directory, or clear the field when
    * empty (so the field re-inherits the composition default). Success is
    * judged against the state the write left behind, exactly like the scope's
@@ -129,12 +158,16 @@ export class CollabSettingsController {
    */
   async save(): Promise<boolean> {
     const draft = this.store.getSnapshot().draft.trim()
+    const depthDraft = this.store.getSnapshot().depthDraft.trim()
     this.store.update((state) => { state.saved = false })
     if (draft === '') await this.scope.unset('cloneDir')
     else await this.scope.set('cloneDir', draft)
+    if (depthDraft === '') await this.scope.unset('cloneDepth')
+    else await this.scope.set('cloneDepth', Number(depthDraft))
     this.derive()
     const current = this.store.getSnapshot()
-    if (current.status === 'ready' && current.cloneDir === draft) {
+    const persisted = depthDraft === '' ? 0 : Number(depthDraft)
+    if (current.status === 'ready' && current.cloneDir === draft && current.cloneDepth === persisted) {
       this.store.update((state) => { state.saved = true })
       return true
     }

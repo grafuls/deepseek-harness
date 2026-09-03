@@ -126,6 +126,7 @@ export function apply(ctx: ClientContext): void {
       deleteSelected: () => { void controller.deleteSelected() },
       previewPush: (workspaceId, branch) => controller.previewPush(workspaceId, branch),
       pushBranch: (workspaceId, branch) => controller.pushBranch(workspaceId, branch),
+      syncWorkspace: workspaceId => controller.syncWorkspace(workspaceId),
     },
   })
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-collab: workspaces manager dictionaries')

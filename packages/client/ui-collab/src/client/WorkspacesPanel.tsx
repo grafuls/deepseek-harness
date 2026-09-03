@@ -72,6 +72,11 @@ export interface CollabWorkspacesActions {
    * confirmation; resolves the push outcome, or undefined on a folded failure.
    */
   pushBranch: (workspaceId: string, branch?: string) => Promise<CollabPushView | undefined>
+  /**
+   * Fetch the origin's current state into a settled clone without moving the
+   * checkout; resolves whether the fetch completed, or undefined on a failure.
+   */
+  syncWorkspace: (workspaceId: string) => Promise<{ fetched: boolean } | undefined>
 }
 
 /** Registration-side injected facts: the shared store plus collab actions. */
@@ -247,6 +252,18 @@ function WorkspaceDetail({ state, actions, t }: {
       }
     })
   }
+  // A successful sync fetches only remote-tracking refs, so the branch chip
+  // and dirty marker do not change; the list refresh keeps the manager honest
+  // and the transient note acknowledges the action.
+  const [synced, setSynced] = useState(false)
+  const syncWorkspace = (workspaceId: string): void => {
+    void actions.syncWorkspace(workspaceId).then((result) => {
+      if (result === undefined) return
+      setSynced(true)
+      actions.refresh()
+      window.setTimeout(() => { setSynced(false) }, 2200)
+    })
+  }
   const submitInvite = (): void => {
     actions.invite(email, inviteRole)
     setEmail('')
@@ -341,7 +358,11 @@ function WorkspaceDetail({ state, actions, t }: {
               <button type="button" className={css.dangerButton} disabled={state.working} onClick={() => { setPushOpen(false); setPreview(undefined) }}>{t('cancel')}</button>
             </div>
           ) : (
-            <button type="button" className={css.createButton} onClick={() => { openPush(selected.id) }}>{t('pushBranch')}</button>
+            <div className={css.createRow}>
+              <button type="button" className={css.createButton} onClick={() => { openPush(selected.id) }}>{t('pushBranch')}</button>
+              <button type="button" className={css.createButton} disabled={state.working} onClick={() => { syncWorkspace(selected.id) }}>{t('syncBranch')}</button>
+              {synced && <span className={css.pushResult}>{t('syncedOk')}</span>}
+            </div>
           )}
         </div>
       )}

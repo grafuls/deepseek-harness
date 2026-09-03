@@ -90,6 +90,7 @@ function actions(): CollabWorkspacesActions {
     deleteSelected: vi.fn(),
     previewPush: vi.fn(),
     pushBranch: vi.fn(),
+    syncWorkspace: vi.fn(),
     reorderSession: vi.fn(),
   }
 }

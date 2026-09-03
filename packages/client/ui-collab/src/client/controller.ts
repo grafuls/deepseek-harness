@@ -576,4 +576,23 @@ export class CollabWorkspacesController {
       return undefined
     }
   }
+
+  /**
+   * Fetch the origin's current state into a settled clone (remote-tracking
+   * refs only, never the working tree), so a member pulls the shared
+   * repository's latest without touching any session's branch.
+   * @param workspaceId - the workspace whose clone to sync.
+   * @returns whether the fetch completed, or undefined on a folded failure (banner).
+   */
+  async syncWorkspace(workspaceId: string): Promise<{ fetched: boolean } | undefined> {
+    this.store.set({ ...this.store.getSnapshot(), working: true, error: undefined })
+    try {
+      const synced = await this.api.fetchSync(workspaceId)
+      this.store.set({ ...this.store.getSnapshot(), working: false })
+      return synced
+    } catch (error) {
+      this.store.set({ ...this.store.getSnapshot(), working: false, error: this.foldWireError(error) })
+      return undefined
+    }
+  }
 }

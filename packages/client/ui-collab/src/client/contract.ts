@@ -402,6 +402,18 @@ export class CollabApi {
   }
 
   /**
+   * Fetch the origin's current state into a settled clone without moving the
+   * checkout, so members pull the shared repository's latest commits without
+   * disturbing open session lines (remote-tracking refs only). Server-side
+   * failures (no settled clone, git errors) fold to the request error.
+   * @param workspaceId - the workspace whose clone to sync.
+   * @returns whether the fetch completed.
+   */
+  fetchSync(workspaceId: string): Promise<{ fetched: boolean }> {
+    return this.request('collab/workspace.fetch', { workspaceId })
+  }
+
+  /**
    * Rename a workspace (admin only); the shared name change applies for every
    * member once the host record updates.
    * @param workspaceId - the workspace to rename.

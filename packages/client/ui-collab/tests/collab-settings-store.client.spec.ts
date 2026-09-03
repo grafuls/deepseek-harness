@@ -100,7 +100,12 @@ describe('CollabSettingsController', () => {
     const controller = new CollabSettingsController(fake.scope, store)
     controller.setDraft('  /data/b  ')
     await expect(controller.save()).resolves.toBe(true)
-    expect(fake.calls).toEqual([{ kind: 'set', field: 'cloneDir', value: '/data/b' }])
+    // Save persists both fields: the directory write plus a no-op depth unset
+    // (the draft is untouched at its data-root default).
+    expect(fake.calls).toEqual([
+      { kind: 'set', field: 'cloneDir', value: '/data/b' },
+      { kind: 'unset', field: 'cloneDepth', value: undefined },
+    ])
     expect(store.getSnapshot()).toMatchObject({ status: 'ready', cloneDir: '/data/b', draft: '  /data/b  ', saved: true })
     controller.disconnect()
   })
@@ -111,7 +116,10 @@ describe('CollabSettingsController', () => {
     const controller = new CollabSettingsController(fake.scope, store)
     controller.setDraft('')
     await expect(controller.save()).resolves.toBe(true)
-    expect(fake.calls).toEqual([{ kind: 'unset', field: 'cloneDir', value: undefined }])
+    expect(fake.calls).toEqual([
+      { kind: 'unset', field: 'cloneDir', value: undefined },
+      { kind: 'unset', field: 'cloneDepth', value: undefined },
+    ])
     expect(store.getSnapshot().cloneDir).toBe('')
     controller.disconnect()
   })
@@ -172,6 +180,64 @@ describe('CollabSettingsController', () => {
     const store = createCollabSettingsStore()
     const controller = new CollabSettingsController(fake.scope, store)
     expect(store.getSnapshot()).toMatchObject({ status: 'loading' })
+    controller.disconnect()
+  })
+
+  it('derives the persisted clone depth into the store and draft', () => {
+    const fake = fakeScope({ cloneDir: '/data/clones', cloneDepth: 7 })
+    const store = createCollabSettingsStore()
+    const controller = new CollabSettingsController(fake.scope, store)
+    expect(store.getSnapshot()).toMatchObject({ cloneDepth: 7, depthDraft: '7', saved: false })
+    controller.disconnect()
+  })
+
+  it('re-seeds an untouched depth draft when the persisted value changes externally', () => {
+    const fake = fakeScope({ cloneDepth: 4 })
+    const store = createCollabSettingsStore()
+    const controller = new CollabSettingsController(fake.scope, store)
+    fake.emit({ value: { cloneDepth: 9 } })
+    expect(store.getSnapshot()).toMatchObject({ cloneDepth: 9, depthDraft: '9' })
+    controller.disconnect()
+  })
+
+  it('degrades a non-positive or non-integer depth to full history', () => {
+    const fake = fakeScope({ cloneDepth: -2 })
+    const store = createCollabSettingsStore()
+    const controller = new CollabSettingsController(fake.scope, store)
+    expect(store.getSnapshot()).toMatchObject({ cloneDepth: 0, depthDraft: '' })
+    controller.disconnect()
+    const fractional = fakeScope({ cloneDepth: 2.5 })
+    const fractionalStore = createCollabSettingsStore()
+    const fractionalController = new CollabSettingsController(fractional.scope, fractionalStore)
+    expect(fractionalStore.getSnapshot()).toMatchObject({ cloneDepth: 0, depthDraft: '' })
+    fractionalController.disconnect()
+  })
+
+  it('writes the drafted clone depth on save', async () => {
+    const fake = fakeScope({ cloneDir: '/data/a', cloneDepth: 2 })
+    const store = createCollabSettingsStore()
+    const controller = new CollabSettingsController(fake.scope, store)
+    controller.setDraftDepth('5')
+    await expect(controller.save()).resolves.toBe(true)
+    expect(fake.calls).toEqual([
+      { kind: 'set', field: 'cloneDir', value: '/data/a' },
+      { kind: 'set', field: 'cloneDepth', value: 5 },
+    ])
+    expect(store.getSnapshot()).toMatchObject({ cloneDepth: 5, depthDraft: '5', saved: true })
+    controller.disconnect()
+  })
+
+  it('clears the depth to re-inherit a full-history clone when the draft is empty', async () => {
+    const fake = fakeScope({ cloneDepth: 4 })
+    const store = createCollabSettingsStore()
+    const controller = new CollabSettingsController(fake.scope, store)
+    controller.setDraftDepth('')
+    await expect(controller.save()).resolves.toBe(true)
+    expect(fake.calls).toEqual([
+      { kind: 'unset', field: 'cloneDir', value: undefined },
+      { kind: 'unset', field: 'cloneDepth', value: undefined },
+    ])
+    expect(store.getSnapshot()).toMatchObject({ cloneDepth: 0, depthDraft: '' })
     controller.disconnect()
   })
 

@@ -8,6 +8,7 @@ import type { GitCommandRunner } from '../src/clone.ts'
 import {
   CollabCredentialUnavailableError,
   CollabPushRejectedError,
+  fetchWorkspaceSync,
   pushLinks,
   pushWorkspaceBranch,
   resolvePushState,
@@ -91,7 +92,8 @@ function fakeRunner(table: Record<string, string>, rejectFf = false): {
       env = extraEnv
       return { stdout: '', stderr: '' }
     }
-    if (key === 'fetch origin topic') {
+    if (key.startsWith('fetch origin')) {
+      env = extraEnv
       return { stdout: '', stderr: '' }
     }
     if (key.startsWith('rev-list --count')) {
@@ -385,6 +387,76 @@ describe('resolvePushState', () => {
       git(fixture.work, ['switch', '-c', 'fresh'])
       const state = await resolvePushState(fixture.work, 'fresh')
       expect(state).toEqual(expect.objectContaining({ base: 'main', remoteSha: undefined, ahead: undefined, behind: undefined }))
+    } finally { await removeFixture(fixture) }
+  })
+})
+
+describe('fetchWorkspaceSync', () => {
+  it('fetches the live remote state into a settled clone without moving the checkout', async () => {
+    const fixture = await makeTrackedRemote()
+    try {
+      const tipBefore = mustOut(fixture.work, ['rev-parse', 'HEAD'])
+      // Move the mainline forward on the bare from a second checkout.
+      const other = `${fixture.bare}.other`
+      execFileSync('git', ['clone', fixture.bare, other], { stdio: ['ignore', 'pipe', 'pipe'] })
+      git(other, ['config', 'user.name', 'Other'])
+      git(other, ['config', 'user.email', 'other@example.com'])
+      git(other, ['commit', '--allow-empty', '-m', 'upstream move'])
+      git(other, ['push', 'origin', 'main'])
+      const tip = mustOut(fixture.bare, ['rev-parse', 'main'])
+      const summary = await fetchWorkspaceSync(fixture.work)
+      expect(summary).toEqual({ fetched: true })
+      // Only remote-tracking refs move: the local checkout is untouched.
+      expect(mustOut(fixture.work, ['rev-parse', 'HEAD'])).toBe(tipBefore)
+      expect(mustOut(fixture.work, ['rev-parse', 'refs/remotes/origin/main'])).toBe(tip)
+    } finally { await removeFixture(fixture) }
+  })
+
+  it('folds a git failure into a thrown error and never touches the tree', async () => {
+    const notGit = await mkdtemp(join(tmpdir(), 'dsh-fetch-notgit-'))
+    try {
+      await expect(fetchWorkspaceSync(notGit)).rejects.toThrow()
+    } finally { await rm(notGit, { recursive: true, force: true }) }
+  })
+
+  it('sends the pinned credential env for a matching HTTPS origin', async () => {
+    const { runner, calls, envOf } = fakeRunner({
+      'remote get-url origin': 'https://github.com/acme/repo.git',
+    })
+    await fetchWorkspaceSync('/clone', {
+      runner,
+      credentials: { host: 'github.com', username: 'm', token: 't' },
+    })
+    expect(calls).toContainEqual(['-C', '/clone', 'fetch', 'origin', '--prune'])
+    expect(envOf()?.GIT_CONFIG_GLOBAL).toEqual(expect.any(String))
+  })
+
+  it('honours a caller cancellation signal across the fetch', async () => {
+    const controller = new AbortController()
+    const { runner } = fakeRunner({
+      'remote get-url origin': 'https://github.com/acme/repo.git',
+    })
+    const result = await fetchWorkspaceSync('/clone', {
+      runner,
+      signal: controller.signal,
+      credentials: { host: 'github.com', username: 'm', token: 't' },
+    })
+    expect(result).toEqual({ fetched: true })
+  })
+
+  it('refuses a fetch when an HTTPS origin has no matching credential', async () => {
+    const { runner } = fakeRunner({
+      'remote get-url origin': 'https://github.com/acme/repo.git',
+    })
+    await expect(fetchWorkspaceSync('/clone', { runner })).rejects.toBeInstanceOf(CollabCredentialUnavailableError)
+  })
+
+  it('fetches a local-path origin without any credential plumbing', async () => {
+    const fixture = await makeTrackedRemote()
+    try {
+      const { runner, calls } = fakeRunner({ 'remote get-url origin': fixture.bare })
+      await fetchWorkspaceSync(fixture.work, { runner })
+      expect(calls).toContainEqual(['-C', fixture.work, 'fetch', 'origin', '--prune'])
     } finally { await removeFixture(fixture) }
   })
 })

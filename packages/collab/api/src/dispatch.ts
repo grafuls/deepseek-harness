@@ -23,9 +23,10 @@ import { InvitationId as makeInvitationId, WorkspaceId as makeWorkspaceId } from
 import { cloneStateOf, type ClonedOutcome, type CloneSettlement, type CollabCloneState } from '@deepseek-ai/dsh-collab-workspaces'
 import { cloneDirectoryName, cloneRepository, gitCloneRunner } from './clone.ts'
 import type { GitCloneCredentials, GitCommandRunner } from './clone.ts'
-import { pushWorkspaceBranch, CollabPushRejectedError, CollabCredentialUnavailableError } from './push.ts'
+import { appendPushAudit } from './audit.ts'
+import { pushWorkspaceBranch, fetchWorkspaceSync, CollabPushRejectedError, CollabCredentialUnavailableError } from './push.ts'
 import { GIT_STATE_TIMEOUT_MS, gitStateOf } from './repo-state.ts'
-import { readCloneDir } from './settings.ts'
+import { readCloneDepth, readCloneDir } from './settings.ts'
 import type {
   CollabInvitationForMeView,
   CollabInvitationView,
@@ -507,8 +508,20 @@ ENDPOINTS.set('collab/workspace.leave', async (ctx, principal, args) => {
 })
 
 ENDPOINTS.set('collab/workspace.delete', async (ctx, principal, args) => {
-  const { wsId, role } = requireWorkspaceAndRole(ctx, principal, requireString(args, 'workspaceId', 'collab/workspace.delete'))
+  const { wsId, role, record } = requireWorkspaceAndRole(ctx, principal, requireString(args, 'workspaceId', 'collab/workspace.delete'))
   await ctx.collabWorkspaces.delete(role, wsId)
+  // Deleting a repository-backed workspace also removes its clone directory
+  // (the shared working tree), matching the destroy-the-workspace contract;
+  // cleanup is best-effort and never fails the delete. A name-only workspace
+  // has no clone path, and a mid-clone delete is already cleaned up by the
+  // clone job when it settles into the removed record.
+  if (record.clonePath !== undefined) {
+    try {
+      await rm(record.clonePath, { recursive: true, force: true })
+    } catch (error: unknown) {
+      ctx.logger.warn(`collab clone removal for '${wsId}' failed: ${String(error)}`)
+    }
+  }
   return collabOk({ deleted: true })
 })
 
@@ -575,9 +588,47 @@ ENDPOINTS.set('collab/workspace.push', async (ctx, principal, args) => {
       identity: { name: principal.name, email: principal.email },
       ...(runner !== undefined ? { runner } : {}),
     })
+    // The push audit trail is an operator record; a write failure is a warn,
+    // never a reason to fail the push the record describes.
+    await appendPushAudit(ctx.collabWorkspaces.root, {
+      ts: new Date().toISOString(),
+      workspaceId: String(wsId),
+      actorId: principal.userId,
+      actorName: principal.name,
+      branch,
+      dryRun,
+      pushed: result.pushed,
+      upToDate: result.upToDate,
+      ...(result.remoteSha === undefined ? {} : { remoteSha: result.remoteSha }),
+      ...(result.compareUrl === undefined ? {} : { compareUrl: result.compareUrl }),
+    }).catch((error: unknown) => { ctx.logger.warn(`collab push audit write failed: ${String(error)}`) })
     return collabOk<CollabPushView>(result)
   } catch (error: unknown) {
     pushWireError(explicitBranch ?? 'the workspace branch', error)
+  }
+})
+
+ENDPOINTS.set('collab/workspace.fetch', async (ctx, principal, args) => {
+  const { wsId, record } = requireWorkspaceAndRole(ctx, principal, requireString(args, 'workspaceId', 'collab/workspace.fetch'))
+  // A name-only or still-cloning workspace has no settled repository to sync.
+  if (cloneStateOf(record) !== 'ready' || record.clonePath === undefined) {
+    throw new CollabWireError('collab-not-a-repository', `collab: workspace '${wsId}' has no settled repository clone to fetch`)
+  }
+  // A fetch moves only remote-tracking refs and never the working tree, so it
+  // is safe to run at any time and needs no confirmation; credential use
+  // follows the same host-pinned rule as the push.
+  const runner = repoRunnerOf(ctx)
+  const credentials = ctx.get('collabGitCloneAuth', false) as GitCloneCredentials | undefined
+  try {
+    await fetchWorkspaceSync(record.clonePath, {
+      ...(credentials !== undefined ? { credentials } : {}),
+      ...(runner !== undefined ? { runner } : {}),
+    })
+    return collabOk({ fetched: true })
+  } catch (error: unknown) {
+    // A fetch is read-only on the shared tree; a git failure is surfaced as a
+    // bad-request rather than an opaque push-style code.
+    throw new CollabWireError('collab-bad-request', `collab: fetching '${wsId}' failed: ${String(error)}`)
   }
 })
 
@@ -728,6 +779,7 @@ async function createClonedWorkspace(
   await mkdir(cloneRoot, { recursive: true })
   await access(cloneRoot, constants.W_OK)
   const clonePath = join(cloneRoot, cloneDirectoryName(String(wsId), repoUrl))
+  const depth = readCloneDepth(ctx)
   const record = await ctx.collabWorkspaces.create(principal.globalRole, principal.userId, name, {
     id: wsId,
     repoUrl,
@@ -736,7 +788,7 @@ async function createClonedWorkspace(
   // The clone runs as a fire-and-forget job: nothing awaits it, so a slow
   // repository transfer can never block a request or plugin teardown. A
   // disposer aborts the in-flight clone when the collab gateway tears down.
-  void cloneJob(ctx, wsId, repoUrl, clonePath, controller.signal)
+  void cloneJob(ctx, wsId, repoUrl, clonePath, controller.signal, depth)
     .then((settlement) => {
       if (settlement === 'absent') return rm(clonePath, { recursive: true, force: true })
     })
@@ -766,12 +818,13 @@ async function cloneJob(
   repoUrl: string,
   clonePath: string,
   signal: AbortSignal,
+  depth?: number,
 ): Promise<CloneSettlement> {
   const runner = ctx.get('collabRepoCloner', false) as GitCommandRunner | undefined
   const credentials = ctx.get('collabGitCloneAuth', false) as GitCloneCredentials | undefined
   let outcome: ClonedOutcome
   try {
-    await cloneRepository(repoUrl, clonePath, runner, credentials, signal)
+    await cloneRepository(repoUrl, clonePath, runner, credentials, signal, depth)
     outcome = { kind: 'cloned', clonePath }
   } catch (error: unknown) {
     // The git error names the cause (missing git, TLS, credentials, space);

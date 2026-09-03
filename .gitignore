@@ -41,3 +41,4 @@ worktrees/
 .agents/worktrees/
 .typert-*/
 repos/
+.phase-d/

@@ -163,6 +163,74 @@ export async function resolvePushState(
  *   {@link CollabCredentialUnavailableError} when an HTTPS origin has no
  *   matching server credential. Other git failures reject with their stderr.
  */
+/**
+ * The credential to send to a clone's origin: an empty no-op auth for a
+ * non-HTTPS (local-path) origin, the host-scoped authorization env when the
+ * pinned credential matches the origin's host, and an explicit refusal when
+ * an HTTPS origin has no matching credential.
+ * @param origin - the clone's origin URL.
+ * @param credentials - the optional pinned server credential.
+ * @returns the auth env (and its temp-config cleanup) to hand to git.
+ */
+async function resolveCredentialEnv(
+  origin: string,
+  credentials: GitCloneCredentials | undefined,
+): Promise<{ env: NodeJS.ProcessEnv | undefined; cleanup: () => Promise<void> }> {
+  const originHost = repoHostOf(origin)
+  return originHost === ''
+    ? { env: undefined as NodeJS.ProcessEnv | undefined, cleanup: () => Promise.resolve() }
+    : credentials === undefined || credentials.host !== originHost
+      ? throwCredentialUnavailable(originHost)
+      : gitAuthEnv(credentials)
+}
+
+/**
+ * Fetch the origin's current state into a settled clone without touching the
+ * working tree or any branch (member- and operator-safe: a fetch moves only
+ * remote-tracking refs, so open session edits are never disturbed). Uses the
+ * same host-pinned credential rule and temporary host-scoped git config as a
+ * push.
+ * @param clonePath - the settled clone directory.
+ * @param options - runner override (unit tests), credential, and cancellation.
+ * @returns whether the fetch completed.
+ */
+export async function fetchWorkspaceSync(
+  clonePath: string,
+  options: {
+    readonly credentials?: GitCloneCredentials
+    readonly runner?: GitCommandRunner
+    readonly signal?: AbortSignal
+  } = {},
+): Promise<{ fetched: boolean }> {
+  const runner = options.runner ?? gitCloneRunner
+  const origin = (await runner(
+    'git',
+    ['-C', clonePath, 'remote', 'get-url', 'origin'],
+    AbortSignal.timeout(GIT_STATE_TIMEOUT_MS),
+  )).stdout.trim()
+  const auth = await resolveCredentialEnv(origin, options.credentials)
+  const enforce = options.signal === undefined
+    ? AbortSignal.timeout(COLLAB_PUSH_TIMEOUT_MS)
+    : AbortSignal.any([options.signal, AbortSignal.timeout(COLLAB_PUSH_TIMEOUT_MS)])
+  try {
+    await runner('git', ['-C', clonePath, 'fetch', 'origin', '--prune'], enforce, auth.env)
+    return { fetched: true }
+  } finally {
+    await auth.cleanup()
+  }
+}
+
+/**
+ * Push one branch of a settled clone to its origin through the server git
+ * credential, never force-forcing: a live remote tip that is not an ancestor
+ * of the local tip rejects before anything moves, and the push itself carries
+ * no force flag. `dryRun` fetches and computes exactly what would move and
+ * stops, so a preview never touches the remote.
+ * @param clonePath - the settled clone directory.
+ * @param branch - the branch to push.
+ * @param options - dry run, credential, push identity, runner, cancellation.
+ * @returns the pushed (or previewed) outcome with links.
+ */
 export async function pushWorkspaceBranch(
   clonePath: string,
   branch: string,
@@ -180,12 +248,7 @@ export async function pushWorkspaceBranch(
     ['-C', clonePath, 'remote', 'get-url', 'origin'],
     AbortSignal.timeout(GIT_STATE_TIMEOUT_MS),
   )).stdout.trim()
-  const originHost = repoHostOf(origin)
-  const auth = originHost === ''
-    ? { env: undefined as NodeJS.ProcessEnv | undefined, cleanup: () => Promise.resolve() }
-    : options.credentials === undefined || options.credentials.host !== originHost
-      ? throwCredentialUnavailable(originHost)
-      : await gitAuthEnv(options.credentials)
+  const auth = await resolveCredentialEnv(origin, options.credentials)
   const enforce = options.signal === undefined
     ? AbortSignal.timeout(COLLAB_PUSH_TIMEOUT_MS)
     : AbortSignal.any([options.signal, AbortSignal.timeout(COLLAB_PUSH_TIMEOUT_MS)])

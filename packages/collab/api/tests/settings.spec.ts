@@ -45,6 +45,14 @@ describe('installCollabSettings', () => {
     expect(ctx.settings.get(COLLAB_SETTINGS_NAMESPACE)).toEqual({ cloneDir: '' })
     await ctx.fiber.dispose()
   })
+
+  it('carries a composed clone depth into the base layer', async () => {
+    const ctx = new Context()
+    installCollabSettings(ctx, { cloneDir: '/cfg/clones', cloneDepth: 5 })
+    await ctx.plugin(MemorySettings).await()
+    expect(ctx.settings.get(COLLAB_SETTINGS_NAMESPACE)).toEqual({ cloneDir: '/cfg/clones', cloneDepth: 5 })
+    await ctx.fiber.dispose()
+  })
 })
 
 describe('readCloneDir', () => {

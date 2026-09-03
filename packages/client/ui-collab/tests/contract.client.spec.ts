@@ -133,6 +133,15 @@ describe('CollabApi', () => {
     expect(seen.map(entry => entry.channel)).toEqual(['/api', '/api', '/api'])
   })
 
+  it('fetches the workspace origin with only the workspace id', async () => {
+    const { call, seen } = fakeCall([
+      { endpoint: 'collab/workspace.fetch', payload: { workspaceId: 'w1' }, result: ok({ fetched: true }) },
+    ])
+    const api = new CollabApi(call)
+    await expect(api.fetchSync('w1')).resolves.toEqual({ fetched: true })
+    expect(seen.map(entry => entry.channel)).toEqual(['/api'])
+  })
+
   it('folds a refused push into a CollabError carrying its wire code', async () => {
     const failing = vi.fn<CollabRpcChannel['call']>(async () => refusal('collab-approval-required'))
     const api = new CollabApi(failing)

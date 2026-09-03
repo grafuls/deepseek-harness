@@ -152,6 +152,8 @@ export async function gitAuthEnv(credentials: GitCloneCredentials): Promise<{
  * @param signal - optional caller cancellation, merged with the clone timeout:
  *   the background clone job aborts it when the collab gateway tears down, so
  *   an in-flight clone never blocks shutdown.
+ * @param depth - optional shallow-clone depth; clones with `--depth` when `>= 1`,
+ *   otherwise full history.
  * @returns settlement once the clone completes.
  */
 export async function cloneRepository(
@@ -160,6 +162,7 @@ export async function cloneRepository(
   runner: GitCommandRunner = gitCloneRunner,
   credentials?: GitCloneCredentials,
   signal?: AbortSignal,
+  depth?: number,
 ): Promise<void> {
   const auth = credentials !== undefined && repoHostOf(repoUrl) === credentials.host
     ? await gitAuthEnv(credentials)
@@ -168,7 +171,12 @@ export async function cloneRepository(
     ? AbortSignal.timeout(COLLAB_CLONE_TIMEOUT_MS)
     : AbortSignal.any([signal, AbortSignal.timeout(COLLAB_CLONE_TIMEOUT_MS)])
   try {
-    await runner('git', ['clone', repoUrl, target], active, auth?.env)
+    // An operator-set clone depth makes the bootstrap a shallow clone (a
+    // faster first materialization); a later fetch deepens it as needed.
+    const args: string[] = depth !== undefined && depth >= 1
+      ? ['clone', '--depth', String(depth), repoUrl, target]
+      : ['clone', repoUrl, target]
+    await runner('git', args, active, auth?.env)
   } catch (error) {
     await rm(target, { recursive: true, force: true })
     throw error

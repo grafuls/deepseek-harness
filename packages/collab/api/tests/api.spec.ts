@@ -7,7 +7,7 @@
 import type { IncomingHttpHeaders } from 'node:http'
 import { EventEmitter } from 'node:events'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { stat, writeFile } from 'node:fs/promises'
 import * as fsPromises from 'node:fs/promises'
 // Clone-root writability is checked with `access(W_OK)` at create; the check
@@ -17,7 +17,19 @@ import * as fsPromises from 'node:fs/promises'
 const accessMock = vi.hoisted(() => vi.fn(async () => undefined))
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
-  return { ...actual, access: accessMock }
+  return {
+    ...actual,
+    access: accessMock,
+    // A path containing `unremovable` rejects removal, so the delete endpoint's
+    // folded clone cleanup is deterministic (permission bits are unreliable
+    // under root). Every other removal delegates to the real implementation.
+    rm: async (path: Parameters<typeof actual.rm>[0], options?: Parameters<typeof actual.rm>[1]) => {
+      if (typeof path === 'string' && path.includes('unremovable')) {
+        throw Object.assign(new Error('EACCES: simulated removal failure'), { code: 'EACCES' })
+      }
+      return actual.rm(path, options) as unknown
+    },
+  }
 })
 
 /** Create a scratch git repository with one committed file, returning its path. */
@@ -94,6 +106,8 @@ interface ClonerHarness {
   calls: Array<{ repoUrl: string; target: string }>
   /** Recorded env each clone ran with, undefined when no credential plumbing was attached. */
   envs: Array<NodeJS.ProcessEnv | undefined>
+  /** Recorded full argv of every `git clone` run, including any `--depth`. */
+  rawArgs: string[][]
   /** Make the next clone fail with a git-style stderr. */
   fail: (message?: string) => void
   /** Hold the next clone open (a provisioning window) until {@link release}. */
@@ -122,8 +136,20 @@ function fakeCloner(): ClonerHarness {
   let failing: string | undefined
   let stalled: Promise<void> | undefined
   let releaseStall: (() => void) | undefined
+  const rawArgs: string[][] = []
   const runner = async (_command: string, args: readonly string[], signal: AbortSignal, env?: NodeJS.ProcessEnv) => {
-    calls.push({ repoUrl: args[1]!, target: args[2]! })
+    rawArgs.push([...args])
+    // `git clone [--depth N] <repo> <target>`: stay correct when an operator
+    // clone depth interposes an option/value pair before the operands.
+    let repoUrl = ''
+    let target = ''
+    for (let i = 1; i < args.length; i += 1) {
+      const arg = args[i]!
+      if (arg === '--depth') { i += 1; continue }
+      if (repoUrl === '') repoUrl = arg
+      else { target = arg; break }
+    }
+    calls.push({ repoUrl, target })
     envs.push(env)
     const gate = stalled
     if (gate !== undefined) {
@@ -145,6 +171,7 @@ function fakeCloner(): ClonerHarness {
   return {
     runner,
     calls,
+    rawArgs,
     envs,
     fail: (message = 'repository not found') => { failing = message },
     stall: () => { stalled = new Promise<void>((resolve) => { releaseStall = resolve }) },
@@ -338,6 +365,37 @@ describe('collab/auth methods', () => {
   })
 })
 
+/** A bare remote plus a working clone of it (real local-transport origin). */
+async function makeBareTrackedWork(): Promise<{ bare: string; work: string; remove: () => void }> {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-api-push-'))
+  const bare = join(root, 'remote.git')
+  const seed = join(root, 'seed')
+  const work = join(root, 'work')
+  const git = (dir: string, args: string[]): void => { execFileSync('git', ['-C', dir, ...args], { stdio: 'pipe' }) }
+  execFileSync('git', ['init', '--bare', '-b', 'main', bare], { stdio: 'pipe' })
+  execFileSync('git', ['init', '-b', 'main', seed], { stdio: 'pipe' })
+  git(seed, ['config', 'user.email', 'seed@example.dev'])
+  git(seed, ['config', 'user.name', 'seed'])
+  writeFileSync(join(seed, 'file.txt'), 'one\n')
+  git(seed, ['add', '.'])
+  git(seed, ['commit', '-q', '-m', 'seed'])
+  git(seed, ['remote', 'add', 'origin', bare])
+  git(seed, ['push', '-u', 'origin', 'main'])
+  execFileSync('git', ['clone', bare, work], { stdio: 'pipe' })
+  git(work, ['config', 'user.email', 'work@example.dev'])
+  git(work, ['config', 'user.name', 'work'])
+  return { bare, work, remove: () => { rmSync(root, { recursive: true, force: true }) } }
+}
+
+/** A collab workspace whose record is settled onto a real clone dir. */
+async function settleRealClone(boot: Booted, clonePath: string): Promise<string> {
+  const created = value(await call(boot, boot.admin, 'collab/workspace.create', {
+    name: 'Repo-backed',
+  })) as CollabWorkspaceView
+  await boot.ctx.collabWorkspaces.settleClone(WorkspaceId(created.id), { kind: 'cloned', clonePath })
+  return created.id
+}
+
 describe('collab/workspace methods', () => {
   it('creates a workspace as owner/admin and lists it', async () => {
     const boot = await bootServices()
@@ -495,6 +553,21 @@ describe('collab/workspace methods', () => {
     const clonePath = join(clonesRoot, `product-${created.id}`)
     await settleCloneToReady(boot, clonePath)
     expect(boot.cloner.calls).toEqual([{ repoUrl: 'https://github.com/example/product.git', target: clonePath }])
+  })
+
+  it('clones shallow when the collab clone depth setting is set', async () => {
+    const boot = await bootServices()
+    boot.ctx.provide('settings', { get: () => ({ cloneDir: '', cloneDepth: 7 }) } as never)
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', {
+      name: 'Product',
+      repoUrl: 'https://github.com/example/product.git',
+    })) as CollabWorkspaceView
+    const clonePath = join(boot.ctx.collabWorkspaces.root, 'workspaces', `product-${created.id}`)
+    await settleCloneToReady(boot, clonePath)
+    // The operator depth reaches the clone argv as `--depth <n>`.
+    const args = boot.cloner.rawArgs.find(entry => entry.includes('--depth'))
+    expect(args?.[args.indexOf('--depth') + 1]).toBe('7')
+    expect(boot.cloner.calls.some(entry => entry.target === clonePath)).toBe(true)
   })
 
   it('creates the clone root on demand before cloning', async () => {
@@ -819,6 +892,34 @@ describe('collab/workspace methods', () => {
     expectCollabError(missing, 'collab-not-found')
   })
 
+  it('deletes a repo-backed workspace together with its clone directory', async () => {
+    const boot = await bootServices()
+    const clonePath = join(boot.root, 'repos', 'product-w1')
+    mkdirSync(clonePath, { recursive: true })
+    writeFileSync(join(clonePath, 'file.txt'), 'x\n')
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Repo' })) as CollabWorkspaceView
+    await boot.ctx.collabWorkspaces.settleClone(WorkspaceId(created.id), { kind: 'cloned', clonePath })
+    expect((await stat(clonePath)).isDirectory()).toBe(true)
+    const deleted = value(await call(boot, boot.admin, 'collab/workspace.delete', { workspaceId: created.id }))
+    expect(deleted).toEqual({ deleted: true })
+    // The shared tree the workspace was cloned into is removed with the record.
+    await expect(stat(clonePath)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('still deletes the record when the clone directory cannot be removed', async () => {
+    const boot = await bootServices()
+    const warn = vi.spyOn(boot.ctx.logger, 'warn').mockImplementation(() => {})
+    const clonePath = join(boot.root, 'unremovable-clone')
+    mkdirSync(clonePath, { recursive: true })
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Repo' })) as CollabWorkspaceView
+    await boot.ctx.collabWorkspaces.settleClone(WorkspaceId(created.id), { kind: 'cloned', clonePath })
+    const deleted = value(await call(boot, boot.admin, 'collab/workspace.delete', { workspaceId: created.id }))
+    expect(deleted).toEqual({ deleted: true })
+    // The folded cleanup warns and leaves the shared tree on disk.
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('collab clone removal'))
+    expect((await stat(clonePath)).isDirectory()).toBe(true)
+  })
+
   it('setMemberRole and removeMember are admin-gated and validated', async () => {
     const boot = await bootServices()
     const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Team' })) as CollabWorkspaceView
@@ -855,37 +956,6 @@ describe('collab/workspace methods', () => {
   })
 
   describe('collab/workspace.push', () => {
-    /** A bare remote plus a working clone of it (real local-transport origin). */
-    async function makeBareTrackedWork(): Promise<{ bare: string; work: string; remove: () => void }> {
-      const root = mkdtempSync(join(tmpdir(), 'dsh-api-push-'))
-      const bare = join(root, 'remote.git')
-      const seed = join(root, 'seed')
-      const work = join(root, 'work')
-      const git = (dir: string, args: string[]): void => { execFileSync('git', ['-C', dir, ...args], { stdio: 'pipe' }) }
-      execFileSync('git', ['init', '--bare', '-b', 'main', bare], { stdio: 'pipe' })
-      execFileSync('git', ['init', '-b', 'main', seed], { stdio: 'pipe' })
-      git(seed, ['config', 'user.email', 'seed@example.dev'])
-      git(seed, ['config', 'user.name', 'seed'])
-      writeFileSync(join(seed, 'file.txt'), 'one\n')
-      git(seed, ['add', '.'])
-      git(seed, ['commit', '-q', '-m', 'seed'])
-      git(seed, ['remote', 'add', 'origin', bare])
-      git(seed, ['push', '-u', 'origin', 'main'])
-      execFileSync('git', ['clone', bare, work], { stdio: 'pipe' })
-      git(work, ['config', 'user.email', 'work@example.dev'])
-      git(work, ['config', 'user.name', 'work'])
-      return { bare, work, remove: () => { rmSync(root, { recursive: true, force: true }) } }
-    }
-
-    /** A collab workspace whose record is settled onto a real clone dir. */
-    async function settleRealClone(boot: Booted, clonePath: string): Promise<string> {
-      const created = value(await call(boot, boot.admin, 'collab/workspace.create', {
-        name: 'Repo-backed',
-      })) as CollabWorkspaceView
-      await boot.ctx.collabWorkspaces.settleClone(WorkspaceId(created.id), { kind: 'cloned', clonePath })
-      return created.id
-    }
-
     it('fails closed without an explicit confirmation', async () => {
       const boot = await bootServices()
       const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'WS' })) as CollabWorkspaceView
@@ -973,6 +1043,19 @@ describe('collab/workspace methods', () => {
         })) as { pushed: boolean; remoteSha: string | undefined }
         expect(result.pushed).toBe(false)
         expect(result.remoteSha).toBeUndefined()
+      } finally { fixture.remove() }
+    })
+
+    it('defaults to the real git runner when none is registered for a dry-run push', async () => {
+      const boot = await bootServices({ noRunner: true })
+      const fixture = await makeBareTrackedWork()
+      try {
+        const id = await settleRealClone(boot, fixture.work)
+        const result = value(await call(boot, boot.admin, 'collab/workspace.push', {
+          workspaceId: id,
+          dryRun: true,
+        })) as { pushed: boolean }
+        expect(result.pushed).toBe(false)
       } finally { fixture.remove() }
     })
 
@@ -1117,6 +1200,145 @@ describe('collab/workspace methods', () => {
         }
         expect(result.pushed).toBe(true)
       } finally { fixture.remove() }
+    })
+
+    it('writes a push audit record under the collab data root', async () => {
+      const boot = await bootServices({ repoRunner: gitCloneRunner })
+      const fixture = await makeBareTrackedWork()
+      try {
+        const id = await settleRealClone(boot, fixture.work)
+        execFileSync('git', ['-C', fixture.work, 'switch', '-c', 'audited'], { stdio: 'pipe' })
+        execFileSync('git', ['-C', fixture.work, 'commit', '--allow-empty', '-m', 'audited work'], { stdio: 'pipe' })
+        value(await call(boot, boot.admin, 'collab/workspace.push', { workspaceId: id, confirm: true }))
+        const trail = join(boot.ctx.collabWorkspaces.root, 'audit', 'push.jsonl')
+        const entry = JSON.parse(readFileSync(trail, 'utf8').trim().split('\n').at(-1)!) as Record<string, unknown>
+        expect(entry).toMatchObject({
+          workspaceId: id,
+          actorId: boot.admin.userId,
+          actorName: 'Owen',
+          branch: 'audited',
+          dryRun: false,
+          pushed: true,
+          upToDate: false,
+        })
+        expect(typeof entry.ts).toBe('string')
+        expect(typeof entry.remoteSha).toBe('string')
+      } finally { fixture.remove() }
+    })
+
+    it('records a dry run in the push audit trail without moving the branch', async () => {
+      const boot = await bootServices({ repoRunner: gitCloneRunner })
+      const fixture = await makeBareTrackedWork()
+      try {
+        const id = await settleRealClone(boot, fixture.work)
+        execFileSync('git', ['-C', fixture.work, 'switch', '-c', 'planned-audit'], { stdio: 'pipe' })
+        const result = value(await call(boot, boot.admin, 'collab/workspace.push', { workspaceId: id, dryRun: true })) as {
+          pushed: boolean
+        }
+        expect(result.pushed).toBe(false)
+        const trail = join(boot.ctx.collabWorkspaces.root, 'audit', 'push.jsonl')
+        const entry = JSON.parse(readFileSync(trail, 'utf8').trim().split('\n').at(-1)!) as Record<string, unknown>
+        expect(entry.dryRun).toBe(true)
+        expect(entry.pushed).toBe(false)
+      } finally { fixture.remove() }
+    })
+
+    it('folds an audit write failure into a warn and never fails the push', async () => {
+      const boot = await bootServices({ repoRunner: gitCloneRunner })
+      const warn = vi.spyOn(boot.ctx.logger, 'warn').mockImplementation(() => {})
+      const fixture = await makeBareTrackedWork()
+      try {
+        const id = await settleRealClone(boot, fixture.work)
+        execFileSync('git', ['-C', fixture.work, 'commit', '--allow-empty', '-m', 'ahead'], { stdio: 'pipe' })
+        // A file named `audit` blocks the audit directory from being created.
+        writeFileSync(join(boot.ctx.collabWorkspaces.root, 'audit'), '')
+        const pushed = value(await call(boot, boot.admin, 'collab/workspace.push', { workspaceId: id, confirm: true })) as {
+          pushed: boolean
+        }
+        expect(pushed.pushed).toBe(true)
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('collab push audit write failed'))
+      } finally { fixture.remove() }
+    })
+  })
+
+  describe('collab/workspace.fetch', () => {
+    it('fetches the origin into a settled clone without moving the checkout', async () => {
+      const boot = await bootServices({ repoRunner: gitCloneRunner })
+      const fixture = await makeBareTrackedWork()
+      try {
+        const id = await settleRealClone(boot, fixture.work)
+        // Push a new commit to the mainline from a second checkout.
+        const other = join(fixture.bare, '.other')
+        execFileSync('git', ['clone', fixture.bare, other], { stdio: 'pipe' })
+        const gitOther = (dir: string, args: string[]): void => { execFileSync('git', ['-C', dir, ...args], { stdio: 'pipe' }) }
+        gitOther(other, ['config', 'user.email', 'other@example.dev'])
+        gitOther(other, ['config', 'user.name', 'other'])
+        gitOther(other, ['commit', '--allow-empty', '-m', 'upstream move'])
+        gitOther(other, ['push', 'origin', 'main'])
+        const before = String(execFileSync('git', ['-C', fixture.work, 'rev-parse', 'HEAD'], { stdio: 'pipe' })).trim()
+        const fetched = value(await call(boot, boot.admin, 'collab/workspace.fetch', { workspaceId: id }))
+        expect(fetched).toEqual({ fetched: true })
+        // Only remote-tracking refs move; the shared checkout is untouched.
+        expect(String(execFileSync('git', ['-C', fixture.work, 'rev-parse', 'HEAD'], { stdio: 'pipe' })).trim()).toBe(before)
+        const tip = String(execFileSync('git', ['-C', fixture.bare, 'rev-parse', 'main'], { stdio: 'pipe' })).trim()
+        expect(String(execFileSync('git', ['-C', fixture.work, 'rev-parse', 'refs/remotes/origin/main'], { stdio: 'pipe' })).trim()).toBe(tip)
+      } finally { fixture.remove() }
+    })
+
+    it('refuses a workspace with no settled repository clone', async () => {
+      const boot = await bootServices()
+      const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Name only' })) as CollabWorkspaceView
+      const result = await call(boot, boot.admin, 'collab/workspace.fetch', { workspaceId: created.id })
+      expectCollabError(result, 'collab-not-a-repository')
+    })
+
+    it('maps a git failure to a bad-request', async () => {
+      const boot = await bootServices({ repoRunner: gitCloneRunner })
+      const notGit = mkdtempSync(join(tmpdir(), 'dsh-api-notgit-'))
+      try {
+        const id = await settleRealClone(boot, notGit)
+        const result = await call(boot, boot.admin, 'collab/workspace.fetch', { workspaceId: id })
+        expectCollabError(result, 'collab-bad-request')
+      } finally { rmSync(notGit, { recursive: true, force: true }) }
+    })
+
+    it('defaults to the real git runner when none is registered for the fetch', async () => {
+      const boot = await bootServices({ noRunner: true })
+      const notGit = mkdtempSync(join(tmpdir(), 'dsh-api-notgit-'))
+      try {
+        const id = await settleRealClone(boot, notGit)
+        const result = await call(boot, boot.admin, 'collab/workspace.fetch', { workspaceId: id })
+        expectCollabError(result, 'collab-bad-request')
+      } finally { rmSync(notGit, { recursive: true, force: true }) }
+    })
+
+    it('sends the pinned server credential to a fetch for a matching HTTPS origin', async () => {
+      const envs: Array<NodeJS.ProcessEnv | undefined> = []
+      const boot = await bootServices({
+        repoRunner: async (_command, _args, _signal, env) => {
+          envs.push(env)
+          return { stdout: 'https://gitlab.example.com/acme/repo.git', stderr: '' }
+        },
+      })
+      boot.ctx.provide('collabGitCloneAuth', { host: 'gitlab.example.com', username: 'machine', token: 'glpat_secret' })
+      const repo = makeGitRepo()
+      try {
+        const id = await settleRealClone(boot, repo)
+        const fetched = value(await call(boot, boot.admin, 'collab/workspace.fetch', { workspaceId: id }))
+        expect(fetched).toEqual({ fetched: true })
+        // The fetched auth used the host-scoped git config carrying the token.
+        expect(envs.some(env => typeof env?.GIT_CONFIG_GLOBAL === 'string')).toBe(true)
+      } finally { rmSync(repo, { recursive: true, force: true }) }
+    })
+
+    it('folds a missing server credential into a bad-request for an HTTPS origin', async () => {
+      const boot = await bootServices({ repoRunner: async () => ({ stdout: 'https://gitlab.example.com/acme/repo.git', stderr: '' }) })
+      const repo = makeGitRepo()
+      try {
+        const id = await settleRealClone(boot, repo)
+        const result = await call(boot, boot.admin, 'collab/workspace.fetch', { workspaceId: id })
+        expectCollabError(result, 'collab-bad-request')
+      } finally { rmSync(repo, { recursive: true, force: true }) }
     })
   })
 })

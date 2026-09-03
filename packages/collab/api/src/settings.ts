@@ -19,11 +19,14 @@ export const COLLAB_SETTINGS_NAMESPACE = settingsNamespace('collab')
 export interface CollabSettingsSection {
   /** Default directory for cloning repositories that back new workspaces; empty uses the collab data root. */
   cloneDir: string
+  /** Optional shallow-clone depth for repository bootstraps; unset clones full history. */
+  cloneDepth?: number
 }
 
-/** Namespace schema: one string preferd with an empty default (the collab data root). */
+/** Namespace schema: a clone-directory string plus an optional positive shallow depth. */
 export const COLLAB_SETTINGS_SCHEMA: z<CollabSettingsSection> = z.object({
   cloneDir: z.string().default(''),
+  cloneDepth: z.number().step(1).min(1),
 })
 
 /**
@@ -34,9 +37,10 @@ export const COLLAB_SETTINGS_SCHEMA: z<CollabSettingsSection> = z.object({
  * @param ctx - the collab API plugin context.
  * @param config - the composition config (its `cloneDir` becomes the base layer).
  */
-export function installCollabSettings(ctx: Context, config: { cloneDir?: string }): void {
+export function installCollabSettings(ctx: Context, config: { cloneDir?: string; cloneDepth?: number }): void {
   installSettingsSection(ctx, COLLAB_SETTINGS_NAMESPACE, COLLAB_SETTINGS_SCHEMA, {
     cloneDir: config.cloneDir ?? '',
+    ...(config.cloneDepth === undefined ? {} : { cloneDepth: config.cloneDepth }),
   }, {
     // Every read happens at dispatch time through the settings provider.
     setSource: () => {},
@@ -58,6 +62,22 @@ export function readCloneDir(ctx: Context): string {
   const configured = settings?.get(String(COLLAB_SETTINGS_NAMESPACE))?.cloneDir
   const explicit = typeof configured === 'string' ? configured.trim() : ''
   return explicit === '' ? '' : explicit
+}
+
+/**
+ * Read the configured shallow-clone depth for repository bootstraps; undefined
+ * (the schema default) clones full history. Only a positive integer is
+ * honored; any other stored value is treated as unset.
+ * @param ctx - the collab API plugin context.
+ * @returns the clone depth, or undefined for a full clone.
+ */
+export function readCloneDepth(ctx: Context): number | undefined {
+  const settings = ctx.get(
+    'settings',
+    false,
+  ) as { get(ns: string): { cloneDepth?: unknown } | undefined } | undefined
+  const raw = settings?.get(String(COLLAB_SETTINGS_NAMESPACE))?.cloneDepth
+  return typeof raw === 'number' && Number.isInteger(raw) && raw >= 1 ? raw : undefined
 }
 
 /**

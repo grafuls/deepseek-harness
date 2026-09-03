@@ -66,6 +66,34 @@ describe('cloneRepository', () => {
     expect((await stat(target)).isDirectory()).toBe(true)
   })
 
+  it('passes the configured depth as `--depth` for a shallow clone', async () => {
+    root = await mkdtemp(join(tmpdir(), 'dsh-collab-clone-'))
+    const target = join(root, 'repo')
+    await mkdir(target, { recursive: true })
+    const runner = vi.fn<NativeCommandRunner>(async () => ({ stdout: '', stderr: '' }))
+    await cloneRepository('https://github.com/example/product.git', target, runner, undefined, undefined, 5)
+    expect(runner).toHaveBeenCalledWith(
+      'git',
+      ['clone', '--depth', '5', 'https://github.com/example/product.git', target],
+      expect.any(AbortSignal),
+      undefined,
+    )
+  })
+
+  it('runs a full clone for an unset or invalid depth', async () => {
+    root = await mkdtemp(join(tmpdir(), 'dsh-collab-clone-'))
+    const target = join(root, 'repo')
+    await mkdir(target, { recursive: true })
+    const runner = vi.fn<NativeCommandRunner>(async () => ({ stdout: '', stderr: '' }))
+    await cloneRepository('https://github.com/example/product.git', target, runner, undefined, undefined, 0)
+    expect(runner).toHaveBeenCalledWith(
+      'git',
+      ['clone', 'https://github.com/example/product.git', target],
+      expect.any(AbortSignal),
+      undefined,
+    )
+  })
+
   it('removes a partial target when the clone fails', async () => {
     root = await mkdtemp(join(tmpdir(), 'dsh-collab-clone-'))
     const target = join(root, 'repo')

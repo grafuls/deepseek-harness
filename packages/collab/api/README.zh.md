@@ -50,13 +50,21 @@ Collab API 网关：一个函数插件，把共享的 harness 进程转变为 Go
 
 `collab/workspace.create` 接受 `repoUrl`；省略或传空字符串即创建仅命名的工作区。非空仓库地址会注册一个置备中的工作区，克隆在后台进行，因此创建请求立即应答——慢速传输永远不会让浏览器请求停在一个跨代理空闲超时上。克隆目标是 `<cloneRoot>/<repoName>-<workspaceId>`，其中 `<workspaceId>` 是生成的工作区 id，`<repoName>` 是净化成文件系统安全组件后的仓库名（方便管理员一眼认出克隆源自哪个仓库），`<cloneRoot>` 在 `collab` 设置命名空间的 `cloneDir` 被设置时取其值，否则取 collab 数据根下的 `workspaces` 目录。克隆根目录在创建时递归创建且必须对服务器用户可写；配置的目录若无法创建或写入，会立即以 `collab-bad-request` 应答——坏掉的克隆目录永远不会在一次注定失败的克隆之后静默移除工作区。克隆进行期间，列表行的 `cloneState` 为 `cloning`；`collab/workspace.open` 与 `collab/workspace.dir` 以 `collab-clone-pending` 拒绝置备中的记录，对已落定的记录（`cloneState` 为 `ready`）则解析克隆路径，因此成员共享克隆出的工作树作为所挂载工作区的数据。已落定的克隆还会在视图上填充 `gitState`——当前分支、缩写 HEAD 与是否存在未提交更改——在构建视图时通过对克隆的三条短 `git` 调用读取，上限五秒；克隆目录缺失、不是 git 检出或卡住时不报告 `gitState`，而不是让列表失败。在已落定克隆内创建的会话会被切换到自己的工作分支，名为 `<workspace>-<session>`——不存在时从当前 HEAD 创建，已存在时直接切换，因此重新创建或重新挂接的会话会回到自己那条线上，每个会话的提交与推送都留在各自的分支上，而工作区的主线分支保持不动；这个分叉是即发即忘的，失败只记 warn 日志，绝不影响会话创建。`collab/workspace.push` 把一个分支推到克隆的 origin：没有成员的显式 `confirm` 就失败关闭（`collab-approval-required`），默认推送当前检出的分支（或推送显式指定的 `branch`），在拉取到线上远端尖点后拒绝非快进更新（`collab-push-rejected`），支持 `dryRun` 预演将上传什么而不触碰远端（试运行只抓取并报告、不能移动分支，因此跳过确认门禁），并应答新的远端 SHA 以及针对 HTTPS origin 的 compare 与「打开拉取请求」链接。读取与推送之间远端分叉也会被 git 本身拒绝，因为推送从不带强制标记。推送会把克隆的本地 `user.name`/`user.email` 改写为触发推送的成员身份（成员有身份时），因此此后在共享树里诞生的提交都带上该成员的署名；只有凭据钉在 origin 主机上时才发送服务器凭据——没有匹配凭据的 HTTPS origin 应答 `collab-credential-unavailable`，其他任何 git 失败应答 `collab-push-failed` 并附 git 诊断（令牌经授权头传输，绝不进 URL，因此诊断不含凭据）。克隆经由 collab 本地的无 shell `git clone` 运行（spawn 时不给子进程 stdin 并设置 `GIT_TERMINAL_PROMPT=0`，因此用户无权访问的仓库会以 git 的 stderr 快速失败，而不是停在凭据提示上等待），超时为十分钟，并在 collab 网关拆除时被取消，运行中的克隆绝不被阻塞停机。克隆失败会删除不完整的目标并自动移除置备中的记录，因此失败的仓库初始化不会留下任何东西；因网关在克隆中途重启而残留的置备记录可由创建者删除。访问门通过 collab `workspaceHolding` 关系把克隆目录与数据根目录一视同仁，因此非成员对隐藏克隆下路径的请求会被拒绝。私有仓库只有在操作员配置了服务端 git 凭据（`gitToken` 加 `gitHost`）后才会克隆；该凭据是每实例的秘密，只通过一个宿主作用域、克隆结束后随即删除的 git 配置发送给那个宿主，因此永远不会到达浏览器、工作区记录或克隆自身的配置。
 
+## 仓库的推送、同步与审计
+
+`collab/workspace.push` 把一个分支推到克隆的 origin，「协作工作区」面板的仓库行提供该操作（通过服务器试运行预览，再由成员亲自确认），机制见上文。`collab/workspace.fetch` 在不触碰检出的情况下把已落定的克隆与 origin 同步：它抓取远端跟踪引用并清理过时的引用，绝不触碰工作树或会话的当前分支，因此成员可以把最新的上游拉进共享克隆而不打扰任何会话的那条线。它拒绝仅命名或仍在克隆的记录（`collab-not-a-repository`），并把 git 失败折叠成 `collab-bad-request`。推送与抓取共用钉定的服务器凭据——经临时 `GIT_CONFIG_GLOBAL` 的授权头把令牌只发给匹配的 origin 主机；令牌绝不进入浏览器、线上 URL 或仓库自身的配置。
+
+每次推送（试运行或真实推送）都会向 `<collabWorkspacesRoot>/audit/push.jsonl` 追加一行：工作区与操作者 id、操作者显示名、分支、是否试运行、是已推送还是已是最新，以及成功推送时的新远端 SHA 与对比链接。审计写入是尽力而为的（失败只记 warn，绝不拖垮推送），且审计线索比工作区删除活得更久，因此即使记录与其克隆都已不在，管理员仍能看出谁在何时推了什么。
+
+`collab/workspace.delete` 现在也会删除仓库后端工作区所依托的克隆目录（递归且强制），因此删除工作区会关掉它的工作树，而不是把根留在磁盘上；删不动的克隆仍会完成记录删除，只记 warn。
+
 ## Host 平面按成员资格划定作用域
 
 collab 装配体还为 Host 工作区平面挂载了成员资格决策。在每次请求以及每条 `host()`/`mux()` 流打开时，Host 代理解析连接主体并咨询 collab 成员资格门：collab 根目录下的 Host 工作区（以及绑定在其中的会话）只对该工作区的成员列出、推送与可达，非成员指向隐藏 collab 目录的 Host 调用会被携带工作区 id 的 host 自有错误 `workspace-forbidden` 拒绝。普通 Host 工作区对每个已认证调用者依旧可见。门从服务存储实时读取，因此省略该覆盖层的单用户组合会让 Host 平面逐字节不变，而成员资格变更自下一次请求或新流起生效。
 
 ## 配置
 
-本插件组合 collab 服务并负责两项配置：仓库克隆的默认目录（`cloneDir`，为运行时 `collab` 设置命名空间的值播种初始值，启动后该值由用户通过「协作工作区」设置页拥有），以及克隆私有仓库的可选服务端 git 凭据（`gitToken` 加 `gitHost`、`gitUsername`）。该凭据刻意只归操作员所有：它从插件配置读取，经一个临时、宿主作用域、克隆结束后立即删除的 git 配置路由到克隆，绝不通过 GUI 读回的设置命名空间暴露。其余所有调优都位于其挂载的 collab 服务中（`dsh-collab-*` 根目录、OAuth 客户端、Cookie 策略）。
+本插件组合 collab 服务并负责三项配置：仓库克隆的默认目录（`cloneDir`，为运行时 `collab` 设置命名空间的值播种初始值，启动后该值由用户通过「协作工作区」设置页拥有）、可选的浅克隆深度（`cloneDepth`，正整数，让新克隆只保留那么多个最近提交——`git clone --depth`——以加速首次传输为代价换取截断的历史；不设或清空即克隆完整历史），以及克隆私有仓库的可选服务端 git 凭据（`gitToken` 加 `gitHost`、`gitUsername`）。该凭据刻意只归操作员所有：它从插件配置读取，经一个临时、宿主作用域、克隆结束后立即删除的 git 配置路由到克隆，绝不通过 GUI 读回的设置命名空间暴露。其余所有调优都位于其挂载的 collab 服务中（`dsh-collab-*` 根目录、OAuth 客户端、Cookie 策略）。
 
 ```yaml
 - id: collab-users
@@ -81,6 +89,11 @@ collab 装配体还为 Host 工作区平面挂载了成员资格决策。在每�
     # before the user overrides it through the settings page. Empty (the
     # default) clones under the collab data root's `workspaces` directory.
     cloneDir: !!js dshHomePath('collab/clones')
+    # Optional: shallow-clone depth for new repository clones (positive
+    # integer). Keeps only that many recent commits to speed the first
+    # transfer at the cost of a truncated history; unset or empty clones
+    # full history.
+    # cloneDepth: 10
     # Optional: server git credential so private repositories clone. The
     # token is sent only to `gitHost` (github.com by default) through a
     # temporary host-scoped git config removed right after the clone.
@@ -105,4 +118,4 @@ The package contributes nothing to model requests, so it cannot invalidate cache
 - **两条实时回显携带隐藏会话 id 但不携带会话内容** —— `host()` 的归档会话回显与 `mux()` 的任务/队列/问题基线是进程全局的，因此仍会携带调用者看不见的 collab 会话的工作区 id、会话 id 或任务状态；它们不携带任何会话内容，而枚举表面（`workspace.list`、`sessions.list`/`search`、`history`、`fork`）已被完全划定作用域。
 - **成员资格在请求时与流打开时取样** —— `host()`/`mux()` 流在打开时捕获的主体在该流生命周期内保持不变，因此成员资格的授予或撤销作用于新的请求与新的流，而不是已经推送的帧。
 - **`loader.await()` 不代表 collab 表面已就绪** —— 依赖方的激活在树报告加载完成之后还有一个 tick 才落定，因此就绪消费者应先探测 `/api/collab/auth/session` 再发起请求（真实组合测试正是这么做的）。
-- **删除移除记录但不移除数据** —— `collab/workspace.delete` 会注销工作区，但把它的克隆（或数据）目录留在磁盘上，因此已删除仓库后端工作区的工作树对主机进程仍然可达。用同一个地址重新创建工作区会在新的以 id 命名的目录里实体化一个全新克隆。
+- **删除会移除记录与已落定克隆** —— `collab/workspace.delete` 注销一个工作区，并删除仓库后端工作区所依托的克隆目录（尽力而为；删不动的克隆仍会以 warn 完成删除）。collab 根目录下的推送审计线索予以保留。仅命名工作区已物化的数据目录留给宿主进程管理；从同一 URL 重建工作区会克隆进一个全新的 id 命名目录。

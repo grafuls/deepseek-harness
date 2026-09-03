@@ -6,7 +6,7 @@
  * fed directly (hooks bound by the renderer in production); no render
  * machinery here.
  */
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CollabInvitationView, CollabMemberView, CollabWorkspaceView } from '../src/client/contract.ts'
 import { en } from '../src/client/locales.ts'
@@ -47,6 +47,7 @@ function actions(): CollabWorkspacesActions {
     deleteSelected: vi.fn(),
     previewPush: vi.fn(),
     pushBranch: vi.fn(),
+    syncWorkspace: vi.fn(),
     reorderSession: vi.fn(),
   }
 }
@@ -520,6 +521,66 @@ describe('WorkspacesPanel', () => {
     await waitFor(() => { expect(previewPush).toHaveBeenCalledWith('w1', 'topic') })
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await waitFor(() => { expect(screen.getByRole('button', { name: 'Push branch' })).toBeTruthy() })
+  })
+
+  it('syncs a settled clone from the repository row', async () => {
+    const refresh = vi.fn()
+    const syncWorkspace = vi.fn(async () => ({ fetched: true }))
+    panel(readyState({
+      selectedId: 'w1',
+      myRole: 'admin',
+      workspaces: [{ ...WORKSPACE, gitState: { branch: 'main', sha: 'a1b2c3', dirty: false } }],
+    }), { syncWorkspace, refresh })
+    expect(screen.getByRole('button', { name: 'Sync' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Sync' }))
+    await waitFor(() => { expect(syncWorkspace).toHaveBeenCalledWith('w1') })
+    // The fetch acknowledges with a transient note and refreshes the list.
+    await waitFor(() => { expect(screen.getByText('Fetched the latest remote state')).toBeTruthy() })
+    expect(refresh).toHaveBeenCalled()
+  })
+
+  it('keeps the repository row usable when a sync is refused', async () => {
+    const syncWorkspace = vi.fn(async () => undefined)
+    panel(readyState({
+      selectedId: 'w1',
+      myRole: 'admin',
+      workspaces: [{ ...WORKSPACE, gitState: { branch: 'main', sha: 'a1b2c3', dirty: false } }],
+    }), { syncWorkspace })
+    fireEvent.click(screen.getByRole('button', { name: 'Sync' }))
+    await waitFor(() => { expect(syncWorkspace).toHaveBeenCalledWith('w1') })
+    expect(screen.queryByText('Fetched the latest remote state')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Sync' })).toBeTruthy()
+  })
+
+  it('dismisses the transient sync note when the acknowledge timer elapses', async () => {
+    vi.useFakeTimers()
+    try {
+      const syncWorkspace = vi.fn(async () => ({ fetched: true }))
+      panel(readyState({
+        selectedId: 'w1',
+        myRole: 'admin',
+        workspaces: [{ ...WORKSPACE, gitState: { branch: 'main', sha: 'a1b2c3', dirty: false } }],
+      }), { syncWorkspace })
+      fireEvent.click(screen.getByRole('button', { name: 'Sync' }))
+      // waitFor polls through the fake-timer clock, which never fires while the
+      // timers are frozen; flush the fetch's resolution inside an act scope.
+      await act(async () => { await Promise.resolve() })
+      expect(screen.getByText('Fetched the latest remote state')).toBeTruthy()
+      act(() => { vi.advanceTimersByTime(2200) })
+      expect(screen.queryByText('Fetched the latest remote state')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not offer a sync for a name-only workspace', async () => {
+    panel(readyState({
+      selectedId: 'w1',
+      myRole: 'admin',
+      workspaces: [{ ...WORKSPACE, cloneState: 'none' }],
+    }))
+    expect(screen.queryByRole('button', { name: 'Sync' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Push branch' })).toBeNull()
   })
 
   it('reports up-to-date and preview-only push outcomes without links', async () => {

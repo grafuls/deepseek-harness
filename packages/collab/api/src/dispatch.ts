@@ -21,9 +21,10 @@ import type {
 } from '@deepseek-ai/dsh-collab-workspaces'
 import { InvitationId as makeInvitationId, WorkspaceId as makeWorkspaceId } from '@deepseek-ai/dsh-collab-workspaces'
 import { cloneStateOf, type ClonedOutcome, type CloneSettlement, type CollabCloneState } from '@deepseek-ai/dsh-collab-workspaces'
-import { cloneDirectoryName, cloneRepository } from './clone.ts'
+import { cloneDirectoryName, cloneRepository, gitCloneRunner } from './clone.ts'
 import type { GitCloneCredentials, GitCommandRunner } from './clone.ts'
-import { gitStateOf } from './repo-state.ts'
+import { pushWorkspaceBranch, CollabPushRejectedError, CollabCredentialUnavailableError } from './push.ts'
+import { GIT_STATE_TIMEOUT_MS, gitStateOf } from './repo-state.ts'
 import { readCloneDir } from './settings.ts'
 import type {
   CollabInvitationForMeView,
@@ -31,6 +32,7 @@ import type {
   CollabMemberView,
   CollabMountedWorkspaceView,
   CollabPrincipalView,
+  CollabPushView,
   CollabStatusView,
   CollabUserView,
   CollabWorkspaceDirView,
@@ -109,26 +111,105 @@ function requireGlobalRole(args: Record<string, unknown>, field: string, endpoin
 
 /**
  * Resolve the acting workspace role for the caller, failing with a wire-safe
- * error when the workspace or the membership is missing.
+ * error when the workspace or the membership is missing. The record found by
+ * the existence probe rides along on the return so a caller that mutates or
+ * reads it (e.g. a push) does not do a second lookup with a re-check.
  * @param ctx - the plugin context with the collab services mounted.
  * @param principal - the gate-resolved caller identity.
  * @param workspaceId - raw workspace id from the wire.
- * @returns the branded workspace id and the caller's role.
+ * @returns the branded workspace id, the caller's role, and the found record.
  */
 function requireWorkspaceAndRole(
   ctx: Context,
   principal: CollabPrincipal,
   workspaceId: string,
-): { wsId: WorkspaceId; role: WorkspaceRole } {
+): { wsId: WorkspaceId; role: WorkspaceRole; record: WorkspaceRecord } {
   const wsId = makeWorkspaceId(workspaceId)
-  if (ctx.collabWorkspaces.findById(wsId) === undefined) {
+  const record = ctx.collabWorkspaces.findById(wsId)
+  if (record === undefined) {
     throw new CollabWireError('collab-not-found', `collab: workspace '${wsId}' does not exist`)
   }
   const role = ctx.collabWorkspaces.roleOf(wsId, principal.userId)
   if (role === undefined) {
     throw new CollabWireError('collab-forbidden', `collab: not a member of workspace '${wsId}'`)
   }
-  return { wsId, role }
+  return { wsId, role, record }
+}
+
+/**
+ * The collab-local git runner, or `undefined` when none is registered. The
+ * optional-service probe answers `false` for a missing service, so a `typeof`
+ * guard is the reliable "absent" signal rather than a nullish check.
+ * @param ctx - the collab API plugin context.
+ * @returns the registered runner, or `undefined` to default to real git.
+ */
+function repoRunnerOf(ctx: Context): GitCommandRunner | undefined {
+  // ctx.get answers `false` for a missing optional service, so a typeof guard
+  // is the reliable "absent" signal rather than a nullish check.
+  const runner: unknown = ctx.get('collabRepoCloner', false)
+  return typeof runner === 'function' ? (runner as GitCommandRunner) : undefined
+}
+
+/**
+ * The branch a push defaults to: the clone's current branch, so an explicit
+ * session branch is pushed when a session has forked one, and the mainline
+ * branch otherwise. A clone git cannot read (missing repo, broken checkout)
+ * rejects here; that failure is folded as `collab-push-failed` by the caller.
+ * @param ctx - the collab API plugin context.
+ * @param clonePath - the settled clone's directory.
+ * @returns the current branch name of `clonePath`.
+ * @throws {@link CollabWireError} with `collab-bad-request` when the checkout
+ *   is detached (not a named branch) and the git diagnostic otherwise.
+ */
+async function pushableBranch(ctx: Context, clonePath: string): Promise<string> {
+  const runner = repoRunnerOf(ctx) ?? gitCloneRunner
+  const out = await runner('git', ['-C', clonePath, 'rev-parse', '--abbrev-ref', 'HEAD'], AbortSignal.timeout(GIT_STATE_TIMEOUT_MS))
+  const branch = out.stdout.trim()
+  if (branch === '' || branch === 'HEAD') {
+    throw new CollabWireError('collab-bad-request', 'collab/workspace.push: the workspace is not on a named branch to push')
+  }
+  return branch
+}
+
+/**
+ * Validate an explicit `branch` argument: a plain git branch name that exists
+ * in the clone's namespace, so the push refspec stays inside the member's
+ * workspace. The push reads the branch from the clone; a name that does not
+ * exist there fails the git read rather than being created remotely.
+ * @param args - the endpoint arguments.
+ * @param endpoint - the calling endpoint for error messages.
+ * @returns the trimmed, charset-validated branch name.
+ */
+function requirePushBranch(args: Record<string, unknown>, endpoint: string): string {
+  const branch = requireString(args, 'branch', endpoint).trim()
+  if (branch === '') throw new CollabWireError('collab-bad-request', `${endpoint}: 'branch' must not be empty`)
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(branch)) {
+    throw new CollabWireError('collab-bad-request', `${endpoint}: 'branch' must be a plain git branch name`)
+  }
+  return branch
+}
+
+/**
+ * Fold one push-domain failure into its wire error code. The rejected and
+ * credential-unavailable categories carry the remote host/commit in the
+ * message; every other push failure (missing git, protocol, transport,
+ * space) surfaces as `collab-push-failed` with the git diagnostic, which
+ * never contains a credential because the token travels as a header.
+ * @param branch - the branch the push attempted.
+ * @param error - the thrown push failure.
+ * @throws the mapped `CollabWireError`; never returns.
+ */
+function pushWireError(branch: string, error: unknown): never {
+  // A wire refusal raised inside the fold (e.g. a detached checkout) keeps its
+  // own code; only git-domain failures are re-categorized below.
+  if (error instanceof CollabWireError) throw error
+  if (error instanceof CollabPushRejectedError) {
+    throw new CollabWireError('collab-push-rejected', `collab: pushing '${branch}' is not a fast-forward; the remote branch moved to '${error.remoteSha}'`)
+  }
+  if (error instanceof CollabCredentialUnavailableError) {
+    throw new CollabWireError('collab-credential-unavailable', `collab: no server git credential is pinned to host '${error.host}'; pushing requires one`)
+  }
+  throw new CollabWireError('collab-push-failed', `collab: pushing '${branch}' failed: ${error instanceof Error ? error.message : String(error)}`)
 }
 
 /** Ensure the caller is an instance admin (the users surface has no inner gate). */
@@ -462,6 +543,39 @@ ENDPOINTS.set('collab/workspace.rename', async (ctx, principal, args) => {
     await mount.setTitle(record.name)
   }
   return collabOk(await recordView(record, principal.userId))
+})
+
+ENDPOINTS.set('collab/workspace.push', async (ctx, principal, args) => {
+  const { wsId, record } = requireWorkspaceAndRole(ctx, principal, requireString(args, 'workspaceId', 'collab/workspace.push'))
+  // A push moves a branch on the shared remote, so it fails closed without an
+  // explicit member confirmation; a confirm flag is not gated by role because
+  // any member may push their own session's branch onto its own line.
+  if (args.confirm !== true) {
+    throw new CollabWireError('collab-approval-required', 'collab: pushing a branch requires an explicit confirmation')
+  }
+  // A name-only or still-cloning workspace has no settled repository to push.
+  if (cloneStateOf(record) !== 'ready' || record.clonePath === undefined) {
+    throw new CollabWireError('collab-not-a-repository', `collab: workspace '${wsId}' has no settled repository clone to push`)
+  }
+  // An explicit branch is validated up front (its bad-request refusal is not a
+  // git failure). The default branch read and the push itself run inside the
+  // fold, so a git failure maps to `collab-push-failed` rather than a generic
+  // bad-request.
+  const explicitBranch = args.branch === undefined ? undefined : requirePushBranch(args, 'collab/workspace.push')
+  const runner = repoRunnerOf(ctx)
+  const credentials = ctx.get('collabGitCloneAuth', false) as GitCloneCredentials | undefined
+  try {
+    const branch = explicitBranch ?? (await pushableBranch(ctx, record.clonePath))
+    const result = await pushWorkspaceBranch(record.clonePath, branch, {
+      dryRun: args.dryRun === true,
+      ...(credentials !== undefined ? { credentials } : {}),
+      identity: { name: principal.name, email: principal.email },
+      ...(runner !== undefined ? { runner } : {}),
+    })
+    return collabOk<CollabPushView>(result)
+  } catch (error: unknown) {
+    pushWireError(explicitBranch ?? 'the workspace branch', error)
+  }
 })
 
 ENDPOINTS.set('collab/workspace.setMemberRole', async (ctx, principal, args) => {

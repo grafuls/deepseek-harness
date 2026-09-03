@@ -13,6 +13,11 @@ declare module '@deepseek-ai/dsh-host-apiproxy/api' {
     'collab-internal': {} // no details; the message names the missing host service
     'collab-name-conflict': {} // no details; the message names the colliding title
     'collab-clone-pending': {} // no details; the message names the workspace whose clone is unfinished
+    'collab-approval-required': {} // no details; the push refused a missing member confirmation
+    'collab-not-a-repository': {} // no details; the workspace has no settled clone to push
+    'collab-push-rejected': {} // no details; the message names the branch and the moved remote commit
+    'collab-credential-unavailable': {} // no details; the message names the host no credential covers
+    'collab-push-failed': {} // no details; the message carries the git diagnostic
   }
 }
 
@@ -24,6 +29,11 @@ export type CollabErrorCode =
   | 'collab-internal'
   | 'collab-name-conflict'
   | 'collab-clone-pending'
+  | 'collab-approval-required'
+  | 'collab-not-a-repository'
+  | 'collab-push-rejected'
+  | 'collab-credential-unavailable'
+  | 'collab-push-failed'
 
 /**
  * Build the failure branch of an RpcResult for one collab code.

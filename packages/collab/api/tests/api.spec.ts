@@ -49,7 +49,7 @@ import { createCollabWorkspaceAccess } from '../src/access-gate.ts'
 import { apply, COLLAB_AUTH_LOGIN_PATH, COLLAB_AUTH_LOGOUT_PATH, COLLAB_AUTH_SESSION_PATH } from '../src/index.ts'
 import { dispatchCollabEndpoint, workspaceDataDir } from '../src/dispatch.ts'
 import { collabError } from '../src/errors.ts'
-import type { GitCloneCredentials } from '../src/clone.ts'
+import { gitCloneRunner, type GitCloneCredentials, type GitCommandRunner } from '../src/clone.ts'
 import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { CollabMountedWorkspaceView, CollabWorkspaceView } from '../src/types.ts'
 
@@ -161,6 +161,10 @@ interface GatewayOverrides {
   gateway?: OidcGateway
   /** Omit the pinned redirect URI so each login derives it from the request origin. */
   derivedRedirect?: boolean
+  /** The repo-cloning runner to provide; defaults to the recording fake. */
+  repoRunner?: GitCommandRunner
+  /** Skip registering `collabRepoCloner` so the dispatch defaults to real git. */
+  noRunner?: boolean
 }
 
 async function bootServices(overrides: GatewayOverrides = {}): Promise<Booted> {
@@ -178,9 +182,13 @@ async function bootServices(overrides: GatewayOverrides = {}): Promise<Booted> {
       : { redirectUri: 'http://localhost:3080/api/collab/auth/callback' }),
   })
   // The dispatch reads the repo-clone runner as the optional `collabRepoCloner`
-  // service; install the fake so repo-backed creates never run real git.
+  // service; install the fake so repo-backed creates never run real git, unless
+  // the test opts into a real runner (push tests need real local git) or into
+  // no runner at all (proving the real-git default).
   const cloner = fakeCloner()
-  ctx.provide('collabRepoCloner', cloner.runner)
+  if (overrides.noRunner !== true) {
+    ctx.provide('collabRepoCloner', overrides.repoRunner ?? cloner.runner)
+  }
   const adminRec = await ctx.collabUsers.findOrCreateByGoogle({
     sub: 'google-1',
     email: 'owen@example.com',
@@ -844,6 +852,257 @@ describe('collab/workspace methods', () => {
       role: 'owner',
     })
     expectCollabError(badRole, 'collab-bad-request')
+  })
+
+  describe('collab/workspace.push', () => {
+    /** A bare remote plus a working clone of it (real local-transport origin). */
+    async function makeBareTrackedWork(): Promise<{ bare: string; work: string; remove: () => void }> {
+      const root = mkdtempSync(join(tmpdir(), 'dsh-api-push-'))
+      const bare = join(root, 'remote.git')
+      const seed = join(root, 'seed')
+      const work = join(root, 'work')
+      const git = (dir: string, args: string[]): void => { execFileSync('git', ['-C', dir, ...args], { stdio: 'pipe' }) }
+      execFileSync('git', ['init', '--bare', '-b', 'main', bare], { stdio: 'pipe' })
+      execFileSync('git', ['init', '-b', 'main', seed], { stdio: 'pipe' })
+      git(seed, ['config', 'user.email', 'seed@example.dev'])
+      git(seed, ['config', 'user.name', 'seed'])
+      writeFileSync(join(seed, 'file.txt'), 'one\n')
+      git(seed, ['add', '.'])
+      git(seed, ['commit', '-q', '-m', 'seed'])
+      git(seed, ['remote', 'add', 'origin', bare])
+      git(seed, ['push', '-u', 'origin', 'main'])
+      execFileSync('git', ['clone', bare, work], { stdio: 'pipe' })
+      git(work, ['config', 'user.email', 'work@example.dev'])
+      git(work, ['config', 'user.name', 'work'])
+      return { bare, work, remove: () => { rmSync(root, { recursive: true, force: true }) } }
+    }
+
+    /** A collab workspace whose record is settled onto a real clone dir. */
+    async function settleRealClone(boot: Booted, clonePath: string): Promise<string> {
+      const created = value(await call(boot, boot.admin, 'collab/workspace.create', {
+        name: 'Repo-backed',
+      })) as CollabWorkspaceView
+      await boot.ctx.collabWorkspaces.settleClone(WorkspaceId(created.id), { kind: 'cloned', clonePath })
+      return created.id
+    }
+
+    it('fails closed without an explicit confirmation', async () => {
+      const boot = await bootServices()
+      const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'WS' })) as CollabWorkspaceView
+      const result = await call(boot, boot.admin, 'collab/workspace.push', { workspaceId: created.id })
+      expectCollabError(result, 'collab-approval-required')
+    })
+
+    it('refuses a workspace with no settled repository', async () => {
+      const boot = await bootServices()
+      const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Name only' })) as CollabWorkspaceView
+      const result = await call(boot, boot.admin, 'collab/workspace.push', { workspaceId: created.id, confirm: true })
+      expectCollabError(result, 'collab-not-a-repository')
+    })
+
+    it('pushes the current branch to the origin after a member confirmation', async () => {
+      const boot = await bootServices({ repoRunner: gitCloneRunner })
+      const fixture = await makeBareTrackedWork()
+      try {
+        const id = await settleRealClone(boot, fixture.work)
+        execFileSync('git', ['-C', fixture.work, 'commit', '--allow-empty', '-m', 'ahead of origin'], { stdio: 'pipe' })
+        const pushed = value(await call(boot, boot.admin, 'collab/workspace.push', { workspaceId: id, confirm: true })) as {
+          pushed: boolean
+          branch: string
+          base: string
+          remoteSha: string
+        }
+        expect(pushed.pushed).toBe(true)
+        expect(pushed.branch).toBe('main')
+        expect(pushed.base).toBe('main')
+        const tip = String(execFileSync('git', ['-C', fixture.work, 'rev-parse', 'HEAD'], { stdio: 'pipe' })).trim()
+        expect(pushed.remoteSha).toBe(tip)
+        expect(String(execFileSync('git', ['-C', fixture.bare, 'rev-parse', 'refs/heads/main'], { stdio: 'pipe' })).trim()).toBe(tip)
+      } finally { fixture.remove() }
+    })
+
+    it('pushes an explicit session branch', async () => {
+      const boot = await bootServices({ repoRunner: gitCloneRunner })
+      const fixture = await makeBareTrackedWork()
+      try {
+        const id = await settleRealClone(boot, fixture.work)
+        execFileSync('git', ['-C', fixture.work, 'switch', '-c', 'feature-9'], { stdio: 'pipe' })
+        execFileSync('git', ['-C', fixture.work, 'commit', '--allow-empty', '-m', 'work'], { stdio: 'pipe' })
+        const pushed = value(await call(boot, boot.admin, 'collab/workspace.push', {
+          workspaceId: id,
+          branch: 'feature-9',
+          confirm: true,
+        })) as { pushed: boolean; remoteSha: string }
+        expect(pushed.pushed).toBe(true)
+        expect(String(execFileSync('git', ['-C', fixture.bare, 'rev-parse', 'refs/heads/feature-9'], { stdio: 'pipe' })).trim()).toBe(pushed.remoteSha)
+      } finally { fixture.remove() }
+    })
+
+    it('dry-runs without moving the remote branch', async () => {
+      const boot = await bootServices({ repoRunner: gitCloneRunner })
+      const fixture = await makeBareTrackedWork()
+      try {
+        const id = await settleRealClone(boot, fixture.work)
+        execFileSync('git', ['-C', fixture.work, 'switch', '-c', 'planned-0'], { stdio: 'pipe' })
+        const result = value(await call(boot, boot.admin, 'collab/workspace.push', {
+          workspaceId: id,
+          dryRun: true,
+          confirm: true,
+        })) as { pushed: boolean; remoteSha: string | undefined }
+        expect(result.pushed).toBe(false)
+        expect(result.remoteSha).toBeUndefined()
+        let exists = true
+        try {
+          execFileSync('git', ['-C', fixture.bare, 'show-ref', '--verify', 'refs/heads/planned-0'], { stdio: 'pipe' })
+        } catch {
+          exists = false
+        }
+        expect(exists).toBe(false)
+      } finally { fixture.remove() }
+    })
+
+    it('refuses an invalid branch name', async () => {
+      const boot = await bootServices({ repoRunner: gitCloneRunner })
+      const clone = mkdtempSync(join(tmpdir(), 'dsh-api-branch-'))
+      try {
+        const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'WS' })) as CollabWorkspaceView
+        await boot.ctx.collabWorkspaces.settleClone(WorkspaceId(created.id), { kind: 'cloned', clonePath: clone })
+        const result = await call(boot, boot.admin, 'collab/workspace.push', {
+          workspaceId: created.id,
+          branch: 'bad name',
+          confirm: true,
+        })
+        expectCollabError(result, 'collab-bad-request')
+      } finally { rmSync(clone, { recursive: true, force: true }) }
+    })
+
+    it('refuses a detached clone with no explicit branch', async () => {
+      const boot = await bootServices({ repoRunner: gitCloneRunner })
+      const fixture = await makeBareTrackedWork()
+      try {
+        execFileSync('git', ['-C', fixture.work, 'checkout', '--detach'], { stdio: 'pipe' })
+        const id = await settleRealClone(boot, fixture.work)
+        const result = await call(boot, boot.admin, 'collab/workspace.push', { workspaceId: id, confirm: true })
+        expectCollabError(result, 'collab-bad-request')
+      } finally { fixture.remove() }
+    })
+
+    it('maps a diverged remote branch to the rejected code', async () => {
+      const boot = await bootServices({ repoRunner: gitCloneRunner })
+      const fixture = await makeBareTrackedWork()
+      try {
+        const id = await settleRealClone(boot, fixture.work)
+        execFileSync('git', ['-C', fixture.work, 'switch', '-c', 'clash'], { stdio: 'pipe' })
+        value(await call(boot, boot.admin, 'collab/workspace.push', { workspaceId: id, branch: 'clash', confirm: true }))
+        // Another checkout moves the remote branch forward.
+        const other = join(fixture.bare, '.other')
+        execFileSync('git', ['clone', fixture.bare, other], { stdio: 'pipe' })
+        const gitOther = (dir: string, args: string[]): void => { execFileSync('git', ['-C', dir, ...args], { stdio: 'pipe' }) }
+        gitOther(other, ['switch', '-c', 'clash'])
+        gitOther(other, ['commit', '--allow-empty', '-m', 'moved'])
+        gitOther(other, ['push', '-u', 'origin', 'clash'])
+        // Work now makes its own divergent head; the push is refused atomically.
+        execFileSync('git', ['-C', fixture.work, 'commit', '--allow-empty', '-m', 'divergent'], { stdio: 'pipe' })
+        const result = await call(boot, boot.admin, 'collab/workspace.push', { workspaceId: id, branch: 'clash', confirm: true })
+        expectCollabError(result, 'collab-push-rejected')
+      } finally { fixture.remove() }
+    })
+
+    it('maps a missing server credential to its code for an HTTPS origin', async () => {
+      const boot = await bootServices({ repoRunner: async () => ({ stdout: 'https://gitlab.example.com/acme/repo.git', stderr: '' }) })
+      const repo = makeGitRepo()
+      try {
+        const id = await settleRealClone(boot, repo)
+        const result = await call(boot, boot.admin, 'collab/workspace.push', { workspaceId: id, confirm: true })
+        expectCollabError(result, 'collab-credential-unavailable')
+      } finally { rmSync(repo, { recursive: true, force: true }) }
+    })
+
+    it('maps a git failure to the push-failed code', async () => {
+      const boot = await bootServices({ repoRunner: gitCloneRunner })
+      const notGit = mkdtempSync(join(tmpdir(), 'dsh-api-notgit-'))
+      try {
+        const id = await settleRealClone(boot, notGit)
+        const result = await call(boot, boot.admin, 'collab/workspace.push', { workspaceId: id, confirm: true })
+        expectCollabError(result, 'collab-push-failed')
+      } finally { rmSync(notGit, { recursive: true, force: true }) }
+    })
+
+    it('refuses a whitespace-only branch name', async () => {
+      const boot = await bootServices({ repoRunner: gitCloneRunner })
+      const clone = mkdtempSync(join(tmpdir(), 'dsh-api-branch-'))
+      try {
+        const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'WS' })) as CollabWorkspaceView
+        await boot.ctx.collabWorkspaces.settleClone(WorkspaceId(created.id), { kind: 'cloned', clonePath: clone })
+        const result = await call(boot, boot.admin, 'collab/workspace.push', {
+          workspaceId: created.id,
+          branch: '   ',
+          confirm: true,
+        })
+        expectCollabError(result, 'collab-bad-request')
+      } finally { rmSync(clone, { recursive: true, force: true }) }
+    })
+
+    it('maps a non-Error service throw to push-failed', async () => {
+      const boot = await bootServices({ noRunner: true })
+      const clone = mkdtempSync(join(tmpdir(), 'dsh-api-nonerr-'))
+      try {
+        boot.ctx.provide('collabRepoCloner', async () => { throw 'broken runner' })
+        const id = await settleRealClone(boot, clone)
+        const result = await call(boot, boot.admin, 'collab/workspace.push', { workspaceId: id, confirm: true })
+        expectCollabError(result, 'collab-push-failed')
+      } finally { rmSync(clone, { recursive: true, force: true }) }
+    })
+
+    it('forwards the server credential for a matching HTTPS origin', async () => {
+      const localSha = 'g2deadbeefg2deadbeefg2deadbeefg2deadbeefg2dead'
+      const remoteSha = 'f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0'
+      let revCount = 0
+      const runner: GitCommandRunner = async (_command, args) => {
+        const key = args.slice(2).join(' ')
+        if (key.startsWith('rev-list --count')) {
+          revCount += 1
+          return { stdout: revCount === 1 ? '1' : '0', stderr: '' }
+        }
+        if (key === 'merge-base --is-ancestor f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0 g2deadbeefg2deadbeefg2deadbeefg2deadbeefg2dead') {
+          return { stdout: '', stderr: '' }
+        }
+        const out: Record<string, string> = {
+          'remote get-url origin': 'https://github.com/acme/repo.git',
+          'rev-parse refs/heads/topic': localSha,
+          'ls-remote origin refs/heads/topic': `${remoteSha}\trefs/heads/topic`,
+          'rev-parse refs/remotes/origin/topic': remoteSha,
+          'symbolic-ref --short refs/remotes/origin/HEAD': 'origin/main',
+        }
+        return { stdout: out[key] ?? '', stderr: '' }
+      }
+      const boot = await bootServices({ repoRunner: runner })
+      const clone = mkdtempSync(join(tmpdir(), 'dsh-api-cred-'))
+      try {
+        boot.ctx.provide('collabGitCloneAuth', { host: 'github.com', username: 'machine', token: 'ghp_secret' })
+        const id = await settleRealClone(boot, clone)
+        const result = value(await call(boot, boot.admin, 'collab/workspace.push', {
+          workspaceId: id,
+          branch: 'topic',
+          confirm: true,
+        })) as { pushed: boolean; compareUrl?: string }
+        expect(result.pushed).toBe(true)
+        expect(result.compareUrl).toBe('https://github.com/acme/repo/compare/main...topic')
+      } finally { rmSync(clone, { recursive: true, force: true }) }
+    })
+
+    it('defaults to the real git runner when none is registered', async () => {
+      const boot = await bootServices({ noRunner: true })
+      const fixture = await makeBareTrackedWork()
+      try {
+        const id = await settleRealClone(boot, fixture.work)
+        execFileSync('git', ['-C', fixture.work, 'commit', '--allow-empty', '-m', 'ahead'], { stdio: 'pipe' })
+        const result = value(await call(boot, boot.admin, 'collab/workspace.push', { workspaceId: id, confirm: true })) as {
+          pushed: boolean
+        }
+        expect(result.pushed).toBe(true)
+      } finally { fixture.remove() }
+    })
   })
 })
 

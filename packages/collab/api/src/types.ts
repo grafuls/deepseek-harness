@@ -62,6 +62,35 @@ export interface CollabGitWorkspaceState {
   dirty: boolean
 }
 
+/**
+ * The server-side outcome of a `collab/workspace.push`: what the branch's
+ * push reached, and the human-facing links to act on the pushed line.
+ */
+export interface CollabPushView {
+  /** Whether the push moved the remote branch (false for dry-run or up-to-date). */
+  pushed: boolean
+  /** Whether the remote branch already pointed at the same commit. */
+  upToDate: boolean
+  /** The pushed branch name (the session's work branch or the workspace mainline). */
+  branch: string
+  /** The mainline branch the compare link roots at; empty when unknown. */
+  base: string
+  /** The pushed commit on the local side. */
+  localSha: string
+  /** The remote tip after the push; the pre-push tip on a dry-run; absent when the branch was never pushed. */
+  remoteSha: string | undefined
+  /** Local commits not on the remote branch, when the remote tip is known. */
+  ahead: number | undefined
+  /** Remote commits not on the local branch, when the remote tip is known. */
+  behind: number | undefined
+  /** The origin URL the branch lives on (credentials never appear in it). */
+  remote: string
+  /** Open-a-diff (base...branch) link for an HTTPS origin with a known base. */
+  compareUrl?: string
+  /** Open-a-pull-request link for an HTTPS origin with a known base. */
+  prUrl?: string
+}
+
 /** Client-safe membership row, enriched from the user registry when present. */
 export interface CollabMemberView {
   userId: string

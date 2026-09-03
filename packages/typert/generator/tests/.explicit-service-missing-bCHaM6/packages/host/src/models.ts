@@ -113,7 +113,7 @@ export interface SyntaxZoo {
   anyValue: any
   bigintValue: bigint
   parenthesized: (Entity | null)
-  literals: 1 | 1n | -2 | -2n | false | `fixed`
+  literals: 1 | 1n | -2 | -2n | false | 'fixed'
   readonly uniqueToken: unique symbol
   intersection: Entity & { active: boolean }
   array: string[]

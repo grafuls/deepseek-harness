@@ -930,233 +930,233 @@ export function CollabSection({
       {/* The wide body: section header, invitations, and the scrolling list. */}
       {wide && (
         <>
-      <div className={css.sectionHeader}>
-        <span className={clsx(css.sectionLabel, searchExpanded && css.sectionLabelHidden)}>{t('title')}</span>
-        <div className={clsx(css.searchSlot, searchExpanded && css.searchSlotExpanded)}>
-          <div
-            ref={searchRoot}
-            className={clsx(css.search, searchExpanded && css.searchExpanded)}
-            onClick={() => { setSearchExpanded(true) }}
-          >
-            <Tooltip label={t('search')} side="bottom" delayMs={500} disabled={searchExpanded}>
-              <button
-                type="button"
-                className={css.searchButton}
-                aria-label={t('search')}
-                aria-expanded={searchExpanded}
+          <div className={css.sectionHeader}>
+            <span className={clsx(css.sectionLabel, searchExpanded && css.sectionLabelHidden)}>{t('title')}</span>
+            <div className={clsx(css.searchSlot, searchExpanded && css.searchSlotExpanded)}>
+              <div
+                ref={searchRoot}
+                className={clsx(css.search, searchExpanded && css.searchExpanded)}
                 onClick={() => { setSearchExpanded(true) }}
               >
-                <IconSearchOutline16 size={searchExpanded ? 11 : 14} />
-              </button>
-            </Tooltip>
-            <input
-              ref={searchInput}
-              className={css.searchInput}
-              type="text"
-              placeholder={t('searchPlaceholder')}
-              value={query}
-              tabIndex={searchExpanded ? 0 : -1}
-              onChange={(e) => { setQuery(sanitizeSearchQuery(e.target.value)) }}
-              onKeyDown={(e) => {
-                if (e.key !== 'Escape') return
-                setQuery('')
-                setSearchExpanded(false)
-              }}
-            />
-            {searchExpanded && (
-              <button
-                type="button"
-                className={css.clearButton}
-                aria-label={t('searchClear')}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setQuery('')
-                  setSearchExpanded(false)
-                }}
-              >
-                <IconCloseFill14 />
-              </button>
-            )}
-          </div>
-        </div>
-        <div className={clsx(css.headerActions, searchExpanded && css.headerActionsHidden)}>
-          <CollabViewOptions
-            groupBy={state.groupBy}
-            orderBy={state.orderBy}
-            onGroupPick={(mode) => { actions.setGroupBy(mode) }}
-            onOrderPick={(mode) => { actions.setOrderBy(mode) }}
-            t={t}
-          />
-          {/* Adding is the header's one action: the icon button opens the same
+                <Tooltip label={t('search')} side="bottom" delayMs={500} disabled={searchExpanded}>
+                  <button
+                    type="button"
+                    className={css.searchButton}
+                    aria-label={t('search')}
+                    aria-expanded={searchExpanded}
+                    onClick={() => { setSearchExpanded(true) }}
+                  >
+                    <IconSearchOutline16 size={searchExpanded ? 11 : 14} />
+                  </button>
+                </Tooltip>
+                <input
+                  ref={searchInput}
+                  className={css.searchInput}
+                  type="text"
+                  placeholder={t('searchPlaceholder')}
+                  value={query}
+                  tabIndex={searchExpanded ? 0 : -1}
+                  onChange={(e) => { setQuery(sanitizeSearchQuery(e.target.value)) }}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Escape') return
+                    setQuery('')
+                    setSearchExpanded(false)
+                  }}
+                />
+                {searchExpanded && (
+                  <button
+                    type="button"
+                    className={css.clearButton}
+                    aria-label={t('searchClear')}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setQuery('')
+                      setSearchExpanded(false)
+                    }}
+                  >
+                    <IconCloseFill14 />
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className={clsx(css.headerActions, searchExpanded && css.headerActionsHidden)}>
+              <CollabViewOptions
+                groupBy={state.groupBy}
+                orderBy={state.orderBy}
+                onGroupPick={(mode) => { actions.setGroupBy(mode) }}
+                onOrderPick={(mode) => { actions.setOrderBy(mode) }}
+                t={t}
+              />
+              {/* Adding is the header's one action: the icon button opens the same
               creation dialog the manager's dashed entry uses. */}
-          <CreateWorkspace
-            actions={actions}
-            error={state.error}
-            t={t}
-            renderTrigger={openDialog => (
-              <Tooltip label={t('newWorkspace')} side="bottom" delayMs={500}>
-                <button
-                  type="button"
-                  className={css.iconButton}
-                  aria-label={t('newWorkspace')}
-                  onClick={openDialog}
-                >
-                  <IconProjectAddOutline16 />
-                </button>
-              </Tooltip>
-            )}
-          />
-        </div>
-      </div>
-
-      {/* Pending invitations keep their inline accept rows above the list. */}
-      {state.invitationsForMe.length > 0 && (
-        <div className={css.invitations}>
-          {state.invitationsForMe.map(invitation => (
-            <div key={invitation.id} className={css.invitationRow}>
-              <span className={css.invitationName}>{invitation.workspaceName}</span>
-              <button
-                type="button"
-                className={css.acceptButton}
-                onClick={() => { actions.acceptInvitation(invitation.id) }}
-              >
-                {t('accept')}
-              </button>
+              <CreateWorkspace
+                actions={actions}
+                error={state.error}
+                t={t}
+                renderTrigger={openDialog => (
+                  <Tooltip label={t('newWorkspace')} side="bottom" delayMs={500}>
+                    <button
+                      type="button"
+                      className={css.iconButton}
+                      aria-label={t('newWorkspace')}
+                      onClick={openDialog}
+                    >
+                      <IconProjectAddOutline16 />
+                    </button>
+                  </Tooltip>
+                )}
+              />
             </div>
-          ))}
-        </div>
-      )}
+          </div>
 
-      {syncNote !== null && (
-        <div
-          className={clsx(css.sessionNotice, syncNote.kind === 'error' && css.sessionNoticeError)}
-          role={syncNote.kind === 'error' ? 'alert' : undefined}
-        >
-          {syncNote.text}
-        </div>
-      )}
-
-      <div className={css.listArea}>
-        {state.workspaces.length === 0 && state.invitationsForMe.length === 0 && (
-          <div className={css.empty}>{t('empty')}</div>
-        )}
-        {showNoMatches && (
-          <div className={css.empty}>{t('searchNoMatches')}</div>
-        )}
-        {state.groupBy === 'flat'
-          ? (
-            <div className={css.list} role="tree" aria-label={t('title')}>
-              {visibleFlatSessions.map(entry => {
-                // A flat session's owner workspace is mounted by construction
-                // (rows only stem from mounts), so its drag arm always exists.
-                const commitDrag = commitsByWorkspace.get(entry.workspaceId)!
-                const workspace = state.workspaces.find(candidate => candidate.id === entry.workspaceId)
-                const branch = workspace === undefined ? undefined : sessionBranch(workspace, entry.summary.id)
-                return (
-                  <CollabSessionRow
-                    key={entry.summary.id}
-                    summary={entry.summary}
-                    current={sessionsState.current}
-                    now={now}
-                    onOpen={actions.open}
-                    drag={buildRowDragProps(
-                      sessionDrag, entry.workspaceId, entry.summary.id,
-                      commitDrag, setSessionDrag, sessionDropCommitted,
-                    )}
-                    branch={branch}
-                    onPush={branch === undefined ? undefined : () => { openSessionPush(entry.workspaceId, branch) }}
-                    onSync={branch === undefined ? undefined : () => { runSessionSync(entry.workspaceId) }}
-                    onRename={onSessionRename}
-                    onFork={(id) => { actions.forkSession(id) }}
-                    onArchive={onSessionArchive}
-                    flat
-                    t={t}
-                  />
-                )
-              })}
-            </div>
-          )
-          : (
-            <div className={css.list} role="tree" aria-label={t('title')}>
-              {visibleWorkspaces.map((workspace) => {
-                const sessionIds = sessionIdsOf(workspace)
-                const collapsed = collapsedWorkspaces.has(workspace.id)
-                const expanded = !collapsed
-                const menuOpen = menuOpenWorkspaceId === workspace.id
-                const mount = hostByCollabId.get(workspace.id)
-                // Session rows (and their drag wiring) require a mounted
-                // workspace; without one the group is just the workspace row.
-                const shownSessions: readonly SessionSummary[] = (mount === undefined
-                  ? []
-                  : (expandedOverflow.has(workspace.id)
-                    ? sessionIds
-                    : sessionIds.slice(0, COLLAPSED_SESSION_LIMIT)))
-                  // `sessionIdsOf` drops ids the session store has not pulled
-                  // yet, so every remaining id resolves below (same cast the
-                  // flat path uses against the same guarantee).
-                  .map(id => byId[id] as SessionSummary)
-                return (
-                  <div key={workspace.id} className={css.group}>
-                    <CollabWorkspaceRow
-                      workspace={workspace}
-                      expanded={expanded}
-                      active={sessionsState.current !== undefined && sessionIds.includes(sessionsState.current)}
-                      path={mount?.path}
-                      menuOpen={menuOpen}
-                      onToggle={() => { toggleCollapsed(workspace.id) }}
-                      onMenuChange={(open) => { setMenuOpenWorkspaceId(open ? workspace.id : null) }}
-                      onSelectMenu={(id) => {
-                        setMenuOpenWorkspaceId(null)
-                        handleRowMenuSelect(id, workspace.id, actions)
-                      }}
-                      onRename={onWorkspaceRename}
-                      onNewSession={() => { actions.openWorkspace(workspace.id) }}
-                      t={t}
-                    />
-                    {expanded && shownSessions.map(summary => {
-                      const branch = sessionBranch(workspace, summary.id)
-                      return (
-                        <CollabSessionRow
-                          key={summary.id}
-                          summary={summary}
-                          current={sessionsState.current}
-                          now={now}
-                          onOpen={actions.open}
-                          drag={buildRowDragProps(
-                            sessionDrag, workspace.id, summary.id,
-                            // Session rows only render for a mounted workspace,
-                            // so its drag arm exists (see the guard above).
-                            commitsByWorkspace.get(workspace.id)!,
-                            setSessionDrag, sessionDropCommitted,
-                          )}
-                          branch={branch}
-                          onPush={branch === undefined ? undefined : () => { openSessionPush(workspace.id, branch) }}
-                          onSync={branch === undefined ? undefined : () => { runSessionSync(workspace.id) }}
-                          onRename={onSessionRename}
-                          onFork={(id) => { actions.forkSession(id) }}
-                          onArchive={onSessionArchive}
-                          t={t}
-                        />
-                      )
-                    })}
-                    {expanded && sessionIds.length > COLLAPSED_SESSION_LIMIT && (
-                      <button
-                        type="button"
-                        className={css.sessionOverflowButton}
-                        aria-expanded={expandedOverflow.has(workspace.id)}
-                        onClick={() => { toggleOverflow(workspace.id) }}
-                      >
-                        {expandedOverflow.has(workspace.id)
-                          ? t('sessionsCollapse')
-                          : t('sessionsExpand', { n: sessionIds.length - COLLAPSED_SESSION_LIMIT })}
-                      </button>
-                    )}
-                  </div>
-                )
-              })}
+          {/* Pending invitations keep their inline accept rows above the list. */}
+          {state.invitationsForMe.length > 0 && (
+            <div className={css.invitations}>
+              {state.invitationsForMe.map(invitation => (
+                <div key={invitation.id} className={css.invitationRow}>
+                  <span className={css.invitationName}>{invitation.workspaceName}</span>
+                  <button
+                    type="button"
+                    className={css.acceptButton}
+                    onClick={() => { actions.acceptInvitation(invitation.id) }}
+                  >
+                    {t('accept')}
+                  </button>
+                </div>
+              ))}
             </div>
           )}
-      </div>
+
+          {syncNote !== null && (
+            <div
+              className={clsx(css.sessionNotice, syncNote.kind === 'error' && css.sessionNoticeError)}
+              role={syncNote.kind === 'error' ? 'alert' : undefined}
+            >
+              {syncNote.text}
+            </div>
+          )}
+
+          <div className={css.listArea}>
+            {state.workspaces.length === 0 && state.invitationsForMe.length === 0 && (
+              <div className={css.empty}>{t('empty')}</div>
+            )}
+            {showNoMatches && (
+              <div className={css.empty}>{t('searchNoMatches')}</div>
+            )}
+            {state.groupBy === 'flat'
+              ? (
+                <div className={css.list} role="tree" aria-label={t('title')}>
+                  {visibleFlatSessions.map((entry) => {
+                    // A flat session's owner workspace is mounted by construction
+                    // (rows only stem from mounts), so its drag arm always exists.
+                    const commitDrag = commitsByWorkspace.get(entry.workspaceId)!
+                    const workspace = state.workspaces.find(candidate => candidate.id === entry.workspaceId)
+                    const branch = workspace === undefined ? undefined : sessionBranch(workspace, entry.summary.id)
+                    return (
+                      <CollabSessionRow
+                        key={entry.summary.id}
+                        summary={entry.summary}
+                        current={sessionsState.current}
+                        now={now}
+                        onOpen={actions.open}
+                        drag={buildRowDragProps(
+                          sessionDrag, entry.workspaceId, entry.summary.id,
+                          commitDrag, setSessionDrag, sessionDropCommitted,
+                        )}
+                        branch={branch}
+                        onPush={branch === undefined ? undefined : () => { openSessionPush(entry.workspaceId, branch) }}
+                        onSync={branch === undefined ? undefined : () => { runSessionSync(entry.workspaceId) }}
+                        onRename={onSessionRename}
+                        onFork={(id) => { actions.forkSession(id) }}
+                        onArchive={onSessionArchive}
+                        flat
+                        t={t}
+                      />
+                    )
+                  })}
+                </div>
+              )
+              : (
+                <div className={css.list} role="tree" aria-label={t('title')}>
+                  {visibleWorkspaces.map((workspace) => {
+                    const sessionIds = sessionIdsOf(workspace)
+                    const collapsed = collapsedWorkspaces.has(workspace.id)
+                    const expanded = !collapsed
+                    const menuOpen = menuOpenWorkspaceId === workspace.id
+                    const mount = hostByCollabId.get(workspace.id)
+                    // Session rows (and their drag wiring) require a mounted
+                    // workspace; without one the group is just the workspace row.
+                    const shownSessions: readonly SessionSummary[] = (mount === undefined
+                      ? []
+                      : (expandedOverflow.has(workspace.id)
+                        ? sessionIds
+                        : sessionIds.slice(0, COLLAPSED_SESSION_LIMIT)))
+                    // `sessionIdsOf` drops ids the session store has not pulled
+                    // yet, so every remaining id resolves below (same cast the
+                    // flat path uses against the same guarantee).
+                      .map(id => byId[id] as SessionSummary)
+                    return (
+                      <div key={workspace.id} className={css.group}>
+                        <CollabWorkspaceRow
+                          workspace={workspace}
+                          expanded={expanded}
+                          active={sessionsState.current !== undefined && sessionIds.includes(sessionsState.current)}
+                          path={mount?.path}
+                          menuOpen={menuOpen}
+                          onToggle={() => { toggleCollapsed(workspace.id) }}
+                          onMenuChange={(open) => { setMenuOpenWorkspaceId(open ? workspace.id : null) }}
+                          onSelectMenu={(id) => {
+                            setMenuOpenWorkspaceId(null)
+                            handleRowMenuSelect(id, workspace.id, actions)
+                          }}
+                          onRename={onWorkspaceRename}
+                          onNewSession={() => { actions.openWorkspace(workspace.id) }}
+                          t={t}
+                        />
+                        {expanded && shownSessions.map((summary) => {
+                          const branch = sessionBranch(workspace, summary.id)
+                          return (
+                            <CollabSessionRow
+                              key={summary.id}
+                              summary={summary}
+                              current={sessionsState.current}
+                              now={now}
+                              onOpen={actions.open}
+                              drag={buildRowDragProps(
+                                sessionDrag, workspace.id, summary.id,
+                                // Session rows only render for a mounted workspace,
+                                // so its drag arm exists (see the guard above).
+                                commitsByWorkspace.get(workspace.id)!,
+                                setSessionDrag, sessionDropCommitted,
+                              )}
+                              branch={branch}
+                              onPush={branch === undefined ? undefined : () => { openSessionPush(workspace.id, branch) }}
+                              onSync={branch === undefined ? undefined : () => { runSessionSync(workspace.id) }}
+                              onRename={onSessionRename}
+                              onFork={(id) => { actions.forkSession(id) }}
+                              onArchive={onSessionArchive}
+                              t={t}
+                            />
+                          )
+                        })}
+                        {expanded && sessionIds.length > COLLAPSED_SESSION_LIMIT && (
+                          <button
+                            type="button"
+                            className={css.sessionOverflowButton}
+                            aria-expanded={expandedOverflow.has(workspace.id)}
+                            onClick={() => { toggleOverflow(workspace.id) }}
+                          >
+                            {expandedOverflow.has(workspace.id)
+                              ? t('sessionsCollapse')
+                              : t('sessionsExpand', { n: sessionIds.length - COLLAPSED_SESSION_LIMIT })}
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+          </div>
         </>
       )}
 

@@ -8,7 +8,7 @@ import { useState, type ReactNode } from 'react'
 import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import type { InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
-import type { CollabRole } from './contract.ts'
+import type { CollabPushView, CollabRole } from './contract.ts'
 import { CreateWorkspace } from './CreateWorkspace.tsx'
 import type { NS } from './locales.ts'
 import type { CollabGroupBy, CollabOrderBy, CollabWorkspacesState } from './store.ts'
@@ -62,6 +62,16 @@ export interface CollabWorkspacesActions {
   removeMember: (userId: string) => void
   /** Delete the selected workspace. */
   deleteSelected: () => void
+  /**
+   * Preview a push of a settled repository-backed workspace's branch (server
+   * dry run); resolves the preview, or undefined on a folded failure.
+   */
+  previewPush: (workspaceId: string, branch?: string) => Promise<CollabPushView | undefined>
+  /**
+   * Push one branch to the workspace's origin after the member's own
+   * confirmation; resolves the push outcome, or undefined on a folded failure.
+   */
+  pushBranch: (workspaceId: string, branch?: string) => Promise<CollabPushView | undefined>
 }
 
 /** Registration-side injected facts: the shared store plus collab actions. */
@@ -80,6 +90,25 @@ export type WorkspacesPanelProps = InjectFace<CollabWorkspacesInjected> & PropsL
 /** Human-readable role label from the collab.ui dictionary. */
 function roleLabel(t: WorkspacesPanelProps['t'], role: CollabRole): string {
   return role === 'admin' ? t('roleAdmin') : t('roleDeveloper')
+}
+
+/** Push-result copy from the collab.ui dictionary, per the push outcome kind. */
+function pushOutcomeCopy(t: WorkspacesPanelProps['t'], pushResult: CollabPushView): string {
+  if (pushResult.pushed) return t('pushedOk', { branch: pushResult.branch, sha: pushResult.remoteSha ?? pushResult.localSha })
+  if (pushResult.upToDate) return t('pushedUpToDate', { branch: pushResult.branch })
+  return t('pushPreviewOnly')
+}
+
+/** Confirmation-row copy: a branch label, the up-to-date notice, or the count preview. */
+function pushPreviewCopy(t: WorkspacesPanelProps['t'], preview: CollabPushView | undefined, branch: string): string {
+  if (preview === undefined) return t('pushConfirm', { branch: branch === '' ? t('currentBranch') : branch })
+  if (preview.upToDate) return t('pushUpToDate', { branch: preview.branch })
+  return t('pushPreview', {
+    branch: preview.branch,
+    base: preview.base,
+    ahead: String(preview.ahead ?? 0),
+    behind: String(preview.behind ?? 0),
+  })
 }
 
 /**
@@ -192,10 +221,32 @@ function WorkspaceDetail({ state, actions, t }: {
   actions: CollabWorkspacesActions
   t: WorkspacesPanelProps['t']
 }): ReactNode {
+  const selected = state.workspaces.find(workspace => workspace.id === state.selectedId)
   const isAdmin = state.myRole === 'admin'
   const [inviteOpen, setInviteOpen] = useState(false)
   const [email, setEmail] = useState('')
   const [inviteRole, setInviteRole] = useState<CollabRole>('developer')
+  // The push flow is confirm-gated: open loads a server dry-run preview into
+  // the dialog (a dry run cannot move a branch, so the server does not gate
+  // it), then the push fires only on the member's explicit confirm.
+  const [pushOpen, setPushOpen] = useState(false)
+  const [preview, setPreview] = useState<CollabPushView | undefined>(undefined)
+  const [pushResult, setPushResult] = useState<CollabPushView | undefined>(undefined)
+  const branch = selected?.gitState?.branch ?? ''
+  const openPush = (workspaceId: string): void => {
+    setPushResult(undefined)
+    setPreview(undefined)
+    setPushOpen(true)
+    void actions.previewPush(workspaceId, branch === '' ? undefined : branch).then(setPreview)
+  }
+  const confirmPush = (workspaceId: string): void => {
+    void actions.pushBranch(workspaceId, branch === '' ? undefined : branch).then((result) => {
+      if (result !== undefined) {
+        setPushResult(result)
+        setPushOpen(false)
+      }
+    })
+  }
   const submitInvite = (): void => {
     actions.invite(email, inviteRole)
     setEmail('')
@@ -260,6 +311,39 @@ function WorkspaceDetail({ state, actions, t }: {
       )}
       {isAdmin && (
         <button type="button" className={css.deleteButton} onClick={actions.deleteSelected}>{t('deleteWorkspace')}</button>
+      )}
+      {selected !== undefined && selected.cloneState === 'ready' && (
+        <div className={css.repoBox}>
+          <h2 className={css.sectionTitle}>{t('repository')}</h2>
+          {branch !== '' && (
+            <div
+              className={`${css.gitState} ${selected.gitState?.dirty ? css.gitStateDirty : ''}`}
+              title={selected.gitState?.dirty ? t('gitUncommitted') : undefined}
+            >
+              {selected.gitState?.dirty && '● '}
+              {branch}
+            </div>
+          )}
+          {pushResult !== undefined ? (
+            <div className={css.pushResult}>
+              <span>{pushOutcomeCopy(t, pushResult)}</span>
+              {pushResult.compareUrl && (
+                <a href={pushResult.compareUrl} target="_blank" rel="noreferrer" className={css.linkButton}>{t('openCompare')}</a>
+              )}
+              {pushResult.prUrl && (
+                <a href={pushResult.prUrl} target="_blank" rel="noreferrer" className={css.linkButton}>{t('openPullRequest')}</a>
+              )}
+            </div>
+          ) : pushOpen ? (
+            <div className={css.createRow}>
+              <span>{pushPreviewCopy(t, preview, branch)}</span>
+              <button type="button" className={css.primaryButton} disabled={state.working || preview?.upToDate === true} onClick={() => { confirmPush(selected.id) }}>{t('push')}</button>
+              <button type="button" className={css.dangerButton} disabled={state.working} onClick={() => { setPushOpen(false); setPreview(undefined) }}>{t('cancel')}</button>
+            </div>
+          ) : (
+            <button type="button" className={css.createButton} onClick={() => { openPush(selected.id) }}>{t('pushBranch')}</button>
+          )}
+        </div>
       )}
     </div>
   )

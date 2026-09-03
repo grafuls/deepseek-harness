@@ -961,6 +961,21 @@ describe('collab/workspace methods', () => {
       } finally { fixture.remove() }
     })
 
+    it('runs a dry run without requiring a confirmation (it cannot move a branch)', async () => {
+      const boot = await bootServices({ repoRunner: gitCloneRunner })
+      const fixture = await makeBareTrackedWork()
+      try {
+        const id = await settleRealClone(boot, fixture.work)
+        execFileSync('git', ['-C', fixture.work, 'switch', '-c', 'preview-0'], { stdio: 'pipe' })
+        const result = value(await call(boot, boot.admin, 'collab/workspace.push', {
+          workspaceId: id,
+          dryRun: true,
+        })) as { pushed: boolean; remoteSha: string | undefined }
+        expect(result.pushed).toBe(false)
+        expect(result.remoteSha).toBeUndefined()
+      } finally { fixture.remove() }
+    })
+
     it('refuses an invalid branch name', async () => {
       const boot = await bootServices({ repoRunner: gitCloneRunner })
       const clone = mkdtempSync(join(tmpdir(), 'dsh-api-branch-'))

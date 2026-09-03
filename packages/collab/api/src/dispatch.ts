@@ -549,8 +549,11 @@ ENDPOINTS.set('collab/workspace.push', async (ctx, principal, args) => {
   const { wsId, record } = requireWorkspaceAndRole(ctx, principal, requireString(args, 'workspaceId', 'collab/workspace.push'))
   // A push moves a branch on the shared remote, so it fails closed without an
   // explicit member confirmation; a confirm flag is not gated by role because
-  // any member may push their own session's branch onto its own line.
-  if (args.confirm !== true) {
+  // any member may push their own session's branch onto its own line. A dry
+  // run cannot move a branch (it fetches and reports, then stops), so the
+  // preview is not confirmation-gated.
+  const dryRun = args.dryRun === true
+  if (!dryRun && args.confirm !== true) {
     throw new CollabWireError('collab-approval-required', 'collab: pushing a branch requires an explicit confirmation')
   }
   // A name-only or still-cloning workspace has no settled repository to push.
@@ -567,7 +570,7 @@ ENDPOINTS.set('collab/workspace.push', async (ctx, principal, args) => {
   try {
     const branch = explicitBranch ?? (await pushableBranch(ctx, record.clonePath))
     const result = await pushWorkspaceBranch(record.clonePath, branch, {
-      dryRun: args.dryRun === true,
+      dryRun,
       ...(credentials !== undefined ? { credentials } : {}),
       identity: { name: principal.name, email: principal.email },
       ...(runner !== undefined ? { runner } : {}),

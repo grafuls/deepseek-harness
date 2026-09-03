@@ -45,6 +45,8 @@ function actions(): CollabWorkspacesActions {
     setMemberRole: vi.fn(),
     removeMember: vi.fn(),
     deleteSelected: vi.fn(),
+    previewPush: vi.fn(),
+    pushBranch: vi.fn(),
     reorderSession: vi.fn(),
   }
 }
@@ -381,5 +383,186 @@ describe('WorkspacesPanel', () => {
     const nameless: CollabMemberView = { ...MEMBER, name: '' }
     panel(readyState({ selectedId: 'w1', myRole: 'developer', members: [nameless], invitations: [] }))
     expect(screen.getByText('owen@example.com')).toBeTruthy()
+  })
+
+  it('offers the push surface only for a settled repository-backed clone', () => {
+    panel(readyState({
+      selectedId: 'w1',
+      myRole: 'admin',
+      workspaces: [{ ...WORKSPACE, gitState: { branch: 'topic', sha: 'a1b2c3', dirty: false } }],
+    }))
+    expect(screen.getByText('Repository')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Push branch' })).toBeTruthy()
+    expect(screen.getByText('topic')).toBeTruthy()
+  })
+
+  it('shows no push surface for a name-only workspace', () => {
+    panel(readyState({
+      selectedId: 'w1',
+      myRole: 'admin',
+      workspaces: [{ ...WORKSPACE, cloneState: 'none' }],
+    }))
+    expect(screen.queryByText('Repository')).toBeNull()
+  })
+
+  it('loads a dry-run preview into the confirmation row and pushes on confirm', async () => {
+    const preview = {
+      pushed: false,
+      upToDate: false,
+      branch: 'topic',
+      base: 'main',
+      localSha: 'l1',
+      remoteSha: 'r1',
+      ahead: 2,
+      behind: 0,
+      remote: 'https://github.com/acme/repo.git',
+      compareUrl: 'https://github.com/acme/repo/compare/main...topic',
+      prUrl: 'https://github.com/acme/repo/pull/new/topic',
+    }
+    const previewPush = vi.fn(async () => preview)
+    const pushBranch = vi.fn(async () => ({ ...preview, pushed: true }))
+    panel(readyState({
+      selectedId: 'w1',
+      myRole: 'admin',
+      workspaces: [{ ...WORKSPACE, gitState: { branch: 'topic', sha: 'a1b2c3', dirty: true } }],
+    }), { previewPush, pushBranch })
+    fireEvent.click(screen.getByRole('button', { name: 'Push branch' }))
+    await waitFor(() => { expect(previewPush).toHaveBeenCalledWith('w1', 'topic') })
+    await waitFor(() => { expect(screen.getByText('Push topic to main (2 ahead, 0 behind)')).toBeTruthy() })
+    fireEvent.click(screen.getByRole('button', { name: 'Push' }))
+    await waitFor(() => { expect(pushBranch).toHaveBeenCalledWith('w1', 'topic') })
+    await waitFor(() => { expect(screen.getByText(/Pushed topic @ r1/)).toBeTruthy() })
+    const compare = screen.getByRole('link', { name: 'Compare' })
+    expect(compare.getAttribute('href')).toBe(preview.compareUrl)
+    const pr = screen.getByRole('link', { name: 'Open pull request' })
+    expect(pr.getAttribute('href')).toBe(preview.prUrl)
+  })
+
+  it('disables a push whose preview says the branch is already up to date', async () => {
+    const previewPush = vi.fn(async () => ({
+      pushed: false,
+      upToDate: true,
+      branch: 'main',
+      base: 'main',
+      localSha: 'l1',
+      remoteSha: 'l1',
+      ahead: 0,
+      behind: 0,
+      remote: 'https://github.com/acme/repo.git',
+    }))
+    panel(readyState({
+      selectedId: 'w1',
+      myRole: 'admin',
+      workspaces: [{ ...WORKSPACE, gitState: { branch: 'main', sha: 'a1b2c3', dirty: false } }],
+    }), { previewPush })
+    fireEvent.click(screen.getByRole('button', { name: 'Push branch' }))
+    await waitFor(() => { expect(screen.getByText('Branch main is already in sync with the remote')).toBeTruthy() })
+    expect(screen.getByRole('button', { name: 'Push' }).hasAttribute('disabled')).toBe(true)
+  })
+
+  it('keeps the confirmation row when a push is refused', async () => {
+    const previewPush = vi.fn(async () => undefined)
+    const pushBranch = vi.fn(async () => undefined)
+    panel(readyState({
+      selectedId: 'w1',
+      myRole: 'admin',
+      workspaces: [{ ...WORKSPACE, gitState: { branch: 'topic', sha: 'a1b2c3', dirty: false } }],
+    }), { previewPush, pushBranch })
+    fireEvent.click(screen.getByRole('button', { name: 'Push branch' }))
+    await waitFor(() => { expect(previewPush).toHaveBeenCalledWith('w1', 'topic') })
+    fireEvent.click(screen.getByRole('button', { name: 'Push' }))
+    await waitFor(() => { expect(pushBranch).toHaveBeenCalledWith('w1', 'topic') })
+    // A folded failure keeps the confirmation row for a retry and shows no links.
+    expect(screen.getByRole('button', { name: 'Push' })).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'Compare' })).toBeNull()
+  })
+
+  it('previews the current branch and pushes it when no git state is reported', async () => {
+    const previewPush = vi.fn(async () => ({
+      pushed: false,
+      upToDate: false,
+      branch: 'main',
+      base: 'main',
+      localSha: 'l1',
+      remote: 'https://github.com/acme/repo.git',
+    }))
+    const pushBranch = vi.fn(async () => ({
+      pushed: true,
+      upToDate: false,
+      branch: 'main',
+      base: 'main',
+      localSha: 'l1',
+      remote: 'https://github.com/acme/repo.git',
+    }))
+    panel(readyState({
+      selectedId: 'w1',
+      myRole: 'admin',
+      workspaces: [{ ...WORKSPACE }],
+    }), { previewPush, pushBranch })
+    fireEvent.click(screen.getByRole('button', { name: 'Push branch' }))
+    await waitFor(() => { expect(previewPush).toHaveBeenCalledWith('w1', undefined) })
+    // A preview with no ahead/behind counts falls back to 0 in the copy.
+    await waitFor(() => { expect(screen.getByText('Push main to main (0 ahead, 0 behind)')).toBeTruthy() })
+    fireEvent.click(screen.getByRole('button', { name: 'Push' }))
+    await waitFor(() => { expect(pushBranch).toHaveBeenCalledWith('w1', undefined) })
+    // A pushed result without a remote SHA falls back to the local tip.
+    await waitFor(() => { expect(screen.getByText('Pushed main @ l1')).toBeTruthy() })
+  })
+
+  it('cancels out of the push confirmation row', async () => {
+    const previewPush = vi.fn(async () => undefined)
+    panel(readyState({
+      selectedId: 'w1',
+      myRole: 'admin',
+      workspaces: [{ ...WORKSPACE, gitState: { branch: 'topic', sha: 'a1b2c3', dirty: false } }],
+    }), { previewPush })
+    fireEvent.click(screen.getByRole('button', { name: 'Push branch' }))
+    await waitFor(() => { expect(previewPush).toHaveBeenCalledWith('w1', 'topic') })
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => { expect(screen.getByRole('button', { name: 'Push branch' })).toBeTruthy() })
+  })
+
+  it('reports up-to-date and preview-only push outcomes without links', async () => {
+    const previewPush = vi.fn(async () => undefined)
+    const pushBranch = vi.fn(async (_workspaceId: string, branch?: string) => ({
+      pushed: false,
+      upToDate: true,
+      branch: branch ?? 'main',
+      base: 'main',
+      localSha: 'l1',
+      remoteSha: 'l1',
+      remote: 'https://github.com/acme/repo.git',
+    }))
+    panel(readyState({
+      selectedId: 'w1',
+      myRole: 'admin',
+      workspaces: [{ ...WORKSPACE, gitState: { branch: 'main', sha: 'a1b2c3', dirty: false } }],
+    }), { previewPush, pushBranch })
+    fireEvent.click(screen.getByRole('button', { name: 'Push branch' }))
+    await waitFor(() => { expect(previewPush).toHaveBeenCalled() })
+    fireEvent.click(screen.getByRole('button', { name: 'Push' }))
+    await waitFor(() => { expect(screen.getByText('Branch main is already current on the remote')).toBeTruthy() })
+    expect(screen.queryByRole('link', { name: 'Compare' })).toBeNull()
+  })
+
+  it('labels a preview-only push result without links', async () => {
+    const previewPush = vi.fn(async () => undefined)
+    const pushBranch = vi.fn(async (_workspaceId: string, branch?: string) => ({
+      pushed: false,
+      upToDate: false,
+      branch: branch ?? 'main',
+      base: 'main',
+      localSha: 'l1',
+      remote: 'https://github.com/acme/repo.git',
+    }))
+    panel(readyState({
+      selectedId: 'w1',
+      myRole: 'admin',
+      workspaces: [{ ...WORKSPACE, gitState: { branch: 'topic', sha: 'a1b2c3', dirty: false } }],
+    }), { previewPush, pushBranch })
+    fireEvent.click(screen.getByRole('button', { name: 'Push branch' }))
+    await waitFor(() => { expect(previewPush).toHaveBeenCalled() })
+    fireEvent.click(screen.getByRole('button', { name: 'Push' }))
+    await waitFor(() => { expect(screen.getByText('Preview only; nothing was pushed')).toBeTruthy() })
   })
 })

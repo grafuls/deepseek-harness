@@ -88,6 +88,8 @@ function actions(): CollabWorkspacesActions {
     setMemberRole: vi.fn(),
     removeMember: vi.fn(),
     deleteSelected: vi.fn(),
+    previewPush: vi.fn(),
+    pushBranch: vi.fn(),
     reorderSession: vi.fn(),
   }
 }

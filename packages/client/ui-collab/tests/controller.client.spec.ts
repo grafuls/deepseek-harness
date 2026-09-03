@@ -656,6 +656,75 @@ describe('CollabWorkspacesController mountAll', () => {
   })
 })
 
+describe('CollabWorkspacesController push', () => {
+  const PREVIEW = {
+    pushed: false,
+    upToDate: false,
+    branch: 'topic',
+    base: 'main',
+    localSha: 'l1',
+    remote: 'https://github.com/acme/repo.git',
+    compareUrl: 'https://github.com/acme/repo/compare/main...topic',
+    prUrl: 'https://github.com/acme/repo/pull/new/topic',
+    remoteSha: 'r1',
+    ahead: 2,
+    behind: 0,
+  }
+
+  it('previews a push as a confirmation-free server dry run', async () => {
+    const { store, controller, seen, seenPayloads } = harness({
+      'collab/workspace.push': [ok({ ...PREVIEW })],
+    })
+    store.set({ ...store.getSnapshot(), workspaces: [WORKSPACE] })
+    await expect(controller.previewPush('w1', 'topic')).resolves.toEqual(PREVIEW)
+    expect(seen).toEqual(['collab/workspace.push'])
+    expect(seenPayloads).toEqual([{ workspaceId: 'w1', branch: 'topic', dryRun: true }])
+    expect(store.getSnapshot().working).toBe(false)
+  })
+
+  it('pushes the current branch with the member confirmation', async () => {
+    const { store, controller, seenPayloads } = harness({
+      'collab/workspace.push': [ok({ ...PREVIEW, pushed: true, remoteSha: 'r1' })],
+    })
+    store.set({ ...store.getSnapshot(), workspaces: [WORKSPACE] })
+    const result = await controller.pushBranch('w1')
+    expect(result?.pushed).toBe(true)
+    expect(result?.compareUrl).toBe(PREVIEW.compareUrl)
+    expect(seenPayloads).toEqual([{ workspaceId: 'w1', dryRun: false, confirm: true }])
+    expect(store.getSnapshot().working).toBe(false)
+  })
+
+  it('pushes an explicit branch', async () => {
+    const { controller, seenPayloads } = harness({
+      'collab/workspace.push': [ok({ ...PREVIEW, pushed: true })],
+    })
+    await controller.pushBranch('w1', 'topic')
+    expect(seenPayloads).toEqual([{ workspaceId: 'w1', branch: 'topic', dryRun: false, confirm: true }])
+  })
+
+  it('folds a refused push into the error banner and reports no result', async () => {
+    const { store, controller, seen } = harness({
+      'collab/workspace.push': [refusal('collab-approval-required')],
+    })
+    store.set({ ...store.getSnapshot(), workspaces: [WORKSPACE] })
+    await expect(controller.pushBranch('w1')).resolves.toBeUndefined()
+    const after = store.getSnapshot()
+    expect(after.error).toBe('操作失败，请重试')
+    expect(after.working).toBe(false)
+    expect(seen).toEqual(['collab/workspace.push'])
+  })
+
+  it('folds a dry-run failure without blocking the workspace', async () => {
+    const { store, controller } = harness({
+      'collab/workspace.push': [refusal('collab-credential-unavailable')],
+    })
+    store.set({ ...store.getSnapshot(), workspaces: [WORKSPACE] })
+    await expect(controller.previewPush('w1')).resolves.toBeUndefined()
+    expect(store.getSnapshot().error).toBe('操作失败，请重试')
+    expect(store.getSnapshot().working).toBe(false)
+  })
+})
+
 describe('CollabWorkspacesController reorderSession', () => {
   it('moves a session through the runtime port with its anchor', async () => {
     const { controller, reorderSession } = harness()

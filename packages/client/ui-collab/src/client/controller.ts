@@ -8,7 +8,7 @@
 
 import type { TranslateNS } from '@deepseek-ai/dsh-client-locale/client'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
-import { CollabError, type CollabApi, type CollabRole } from './contract.ts'
+import { CollabError, type CollabApi, type CollabPushView, type CollabRole } from './contract.ts'
 import type { CollabGroupBy, CollabOrderBy, CollabWorkspacesState } from './store.ts'
 
 /** The runtime Workspace face the opener switches into a mounted collab workspace. */
@@ -533,6 +533,47 @@ export class CollabWorkspacesController {
     } catch (error) {
       this.store.set({ ...this.store.getSnapshot(), working: false, error: this.foldWireError(error) })
       return false
+    }
+  }
+
+  /**
+   * Preview a push (server dry run): fetch the live remote tip and compute
+   * what a real push would move without touching the remote. The server does
+   * not gate a dry run by confirmation because it cannot move a branch.
+   * @param workspaceId - the workspace whose clone to inspect.
+   * @param branch - branch to preview; omitted previews the checkout's current branch.
+   * @returns the push preview, or undefined on failure (banner).
+   */
+  async previewPush(workspaceId: string, branch?: string): Promise<CollabPushView | undefined> {
+    this.store.set({ ...this.store.getSnapshot(), working: true, error: undefined })
+    try {
+      const preview = await this.api.push(workspaceId, branch, true)
+      this.store.set({ ...this.store.getSnapshot(), working: false })
+      return preview
+    } catch (error) {
+      this.store.set({ ...this.store.getSnapshot(), working: false, error: this.foldWireError(error) })
+      return undefined
+    }
+  }
+
+  /**
+   * Push one branch of a settled repository-backed workspace to its origin
+   * after the member's own confirmation (the caller only reaches this with
+   * the member's explicit go; the server additionally fails closed unless the
+   * request carries `confirm`).
+   * @param workspaceId - the workspace whose clone to push.
+   * @param branch - branch to push; omitted pushes the checkout's current branch.
+   * @returns the push outcome (new remote tip, compare/PR links), or undefined on failure (banner).
+   */
+  async pushBranch(workspaceId: string, branch?: string): Promise<CollabPushView | undefined> {
+    this.store.set({ ...this.store.getSnapshot(), working: true, error: undefined })
+    try {
+      const pushed = await this.api.push(workspaceId, branch, false, true)
+      this.store.set({ ...this.store.getSnapshot(), working: false })
+      return pushed
+    } catch (error) {
+      this.store.set({ ...this.store.getSnapshot(), working: false, error: this.foldWireError(error) })
+      return undefined
     }
   }
 }

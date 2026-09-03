@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-01-collab-push.md
-2026-09-01-collab-push.md: 148f29d80d72ac95be9b88b46fe66d4cf5149351
-2026-09-01-collab-push.zh.md: 54609556784d319c4c26f694b3685824c88654b5
+2026-09-01-collab-push.md: 91175a19183aea8c0d5bbadf1d9ef190b483a560
+2026-09-01-collab-push.zh.md: 8afb3cf22691a27b2a6aeb0933617140ebfc96ae

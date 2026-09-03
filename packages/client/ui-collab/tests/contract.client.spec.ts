@@ -106,6 +106,41 @@ describe('CollabApi', () => {
     expect(seen[1]!.payload).toEqual({ invitationId: 'i1' })
   })
 
+  it('pushes with an explicit branch and confirmation, or as a dry run', async () => {
+    const pushed = {
+      pushed: true,
+      upToDate: false,
+      branch: 'topic',
+      base: 'main',
+      localSha: 'l1',
+      remoteSha: 'r1',
+      ahead: 2,
+      behind: 0,
+      remote: 'https://github.com/acme/repo.git',
+      compareUrl: 'https://github.com/acme/repo/compare/main...topic',
+      prUrl: 'https://github.com/acme/repo/pull/new/topic',
+    }
+    const preview = { ...pushed, pushed: false, remoteSha: 'r0', ahead: 1, behind: 0, compareUrl: undefined, prUrl: undefined }
+    const { call, seen } = fakeCall([
+      { endpoint: 'collab/workspace.push', payload: { workspaceId: 'w1', branch: 'topic', dryRun: false, confirm: true }, result: ok(pushed) },
+      { endpoint: 'collab/workspace.push', payload: { workspaceId: 'w1', dryRun: true }, result: ok(preview) },
+      { endpoint: 'collab/workspace.push', payload: { workspaceId: 'w1', branch: 'topic' }, result: ok(preview) },
+    ])
+    const api = new CollabApi(call)
+    await expect(api.push('w1', 'topic', false, true)).resolves.toEqual(pushed)
+    await expect(api.push('w1', undefined, true)).resolves.toEqual(preview)
+    await expect(api.push('w1', 'topic')).resolves.toEqual(preview)
+    expect(seen.map(entry => entry.channel)).toEqual(['/api', '/api', '/api'])
+  })
+
+  it('folds a refused push into a CollabError carrying its wire code', async () => {
+    const failing = vi.fn<CollabRpcChannel['call']>(async () => refusal('collab-approval-required'))
+    const api = new CollabApi(failing)
+    await expect(api.push('w1', undefined, false, true)).rejects.toSatisfy(
+      (error: unknown) => error instanceof CollabError && error.code === 'collab-approval-required',
+    )
+  })
+
   it('folds an ok:false envelope into a CollabError carrying the wire code', async () => {
     const failing = vi.fn<CollabRpcChannel['call']>(async () => refusal('collab-forbidden'))
     const api = new CollabApi(failing)

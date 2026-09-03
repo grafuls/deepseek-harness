@@ -72,6 +72,37 @@ export interface CollabGitWorkspaceState {
   dirty: boolean
 }
 
+/**
+ * The outcome of a {@link CollabApi.push}: whether the remote branch moved,
+ * both tips, and — when the branch was pushed to a known mainline — the
+ * compare and open-a-pull-request links for the HTTPS origin.
+ */
+export interface CollabPushView {
+  /** Whether the branch was actually pushed to the remote. */
+  pushed: boolean
+  /** Whether the remote already pointed at the local tip (nothing to do). */
+  upToDate: boolean
+  /** The pushed branch name. */
+  branch: string
+  /** The mainline branch the comparison and pull request base on. */
+  base: string
+  /** The local tip after the push. */
+  localSha: string
+  /** The remote tip after the push; absent when the branch never existed upstream. */
+  remoteSha?: string
+  /** Commits the local tip is ahead of the remote tip. */
+  ahead?: number
+  /** Commits the local tip is behind the remote tip. */
+  behind?: number
+  /** The clone's origin URL. */
+  remote: string
+  /** Compare URL for the pushed branch from the mainline; HTTPS origins only. */
+  compareUrl?: string
+  /** Open-a-pull-request URL for the pushed branch; HTTPS origins only. */
+  prUrl?: string
+}
+
+
 /** One workspace member. */
 export interface CollabMemberView {
   /** Opaque branded user id (string on the wire). */
@@ -342,6 +373,32 @@ export class CollabApi {
    */
   async deleteWorkspace(workspaceId: string): Promise<void> {
     await this.request('collab/workspace.delete', { workspaceId })
+  }
+
+  /**
+   * Push one branch of a settled repository-backed workspace to its origin
+   * through the server credential. A real push fails server-side
+   * (`collab-approval-required`) unless `confirm` is set, which the caller
+   * only sends after the member's own confirmation; a dry run cannot move a
+   * branch and needs no confirmation.
+   * @param workspaceId - the target workspace.
+   * @param branch - branch to push; omitted pushes the checkout's current branch.
+   * @param dryRun - preview what would move without touching the remote.
+   * @param confirm - explicit member confirmation for a real push.
+   * @returns the push outcome with the new remote commit and any repository links.
+   */
+  push(
+    workspaceId: string,
+    branch?: string,
+    dryRun?: boolean,
+    confirm?: boolean,
+  ): Promise<CollabPushView> {
+    return this.request('collab/workspace.push', {
+      workspaceId,
+      ...(branch === undefined ? {} : { branch }),
+      ...(dryRun === undefined ? {} : { dryRun }),
+      ...(confirm === undefined ? {} : { confirm }),
+    })
   }
 
   /**

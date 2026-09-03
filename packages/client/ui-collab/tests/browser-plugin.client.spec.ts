@@ -84,6 +84,11 @@ async function bench(extraChildren: Record<string, unknown> = {}) {
     'collab/workspace.list': [{ ok: true, value: [] }, { ok: true, value: [] }, { ok: true, value: [] }, { ok: true, value: [] }],
     'collab/workspace.myInvitations': [{ ok: true, value: [] }, { ok: true, value: [] }, { ok: true, value: [] }, { ok: true, value: [] }],
     'collab/workspace.delete': [{ ok: true, value: undefined }],
+    // Push preview and confirmed push answer one ok each in the actions lane.
+    'collab/workspace.push': [
+      { ok: true, value: { pushed: false, upToDate: false, branch: 'topic', base: 'main', localSha: 'l1', remote: 'https://github.com/acme/repo.git' } },
+      { ok: true, value: { pushed: true, upToDate: false, branch: 'topic', base: 'main', localSha: 'l1', remoteSha: 'r1', remote: 'https://github.com/acme/repo.git' } },
+    ],
     // Rename resolves once then refuses: the dialog keeps failures open.
     'collab/workspace.rename': [
       { ok: true, value: { id: 'w1', name: 'Eng' } },
@@ -223,7 +228,7 @@ describe('ui-collab client plugin', () => {
   })
 
   it('exposes actions that drive the shared store from the inject face', async () => {
-    const { ctx, slots, startSession, insertSessionBefore } = await bench()
+    const { ctx, slots, seen, startSession, insertSessionBefore } = await bench()
     const fiber = ctx.plugin({ inject: [...inject], apply })
     await fiber.await()
     await new Promise(resolve => setImmediate(resolve))
@@ -279,6 +284,10 @@ describe('ui-collab client plugin', () => {
     expect(store.getSnapshot().orderBy).toBe('manual')
     face.actions.deleteSelected()
     await vi.waitFor(() => { expect(store.getSnapshot().working).toBe(false) })
+    void face.actions.previewPush('w1', 'topic')
+    void face.actions.pushBranch('w1', 'topic')
+    await vi.waitFor(() => { expect(store.getSnapshot().working).toBe(false) })
+    expect(seen).toContain('collab/workspace.push')
     await fiber.dispose()
   })
 

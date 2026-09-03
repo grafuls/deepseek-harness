@@ -32,6 +32,11 @@ function makeGitRepo(): string {
   git(['commit', '-q', '-m', 'init'])
   return dir
 }
+
+/** Read the current branch of a checkout. */
+function currentBranchOf(dir: string): string {
+  return String(execFileSync('git', ['-C', dir, 'branch', '--show-current'], { stdio: 'pipe' })).trim()
+}
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -384,7 +389,9 @@ describe('collab/workspace methods', () => {
       const listed = value(await call(boot, boot.admin, 'collab/workspace.list', {})) as CollabWorkspaceView[]
       const row = listed.find(entry => entry.id === created.id)
       expect(row?.cloneState).toBe('ready')
-      expect(row?.gitState).toEqual(expect.objectContaining({ dirty: false, branch: expect.any(String), sha: expect.any(String) }))
+      const branch = currentBranchOf(repo)
+      const sha = String(execFileSync('git', ['-C', repo, 'rev-parse', '--short', 'HEAD'], { stdio: 'pipe' })).trim()
+      expect(row?.gitState).toEqual({ branch, sha, dirty: false })
       const fetched = value(await call(boot, boot.admin, 'collab/workspace.get', { workspaceId: created.id })) as CollabWorkspaceView
       expect(fetched.gitState?.dirty).toBe(false)
       // A real working-tree edit flips the dirty flag on the next read.
@@ -1154,6 +1161,68 @@ describe('plugin wiring', () => {
     })
     const absent = await bootPlugin({}, { cloneDir: '/clones' })
     expect(absent.booted.ctx.get('collabGitCloneAuth', false)).toBeUndefined()
+  })
+
+  it('forks a per-session branch in the repo-backed workspace each session opens in', async () => {
+    const { booted } = await bootPlugin()
+    const repo = makeGitRepo()
+    try {
+      const created = value(await call(booted, booted.admin, 'collab/workspace.create', { name: 'Product' })) as CollabWorkspaceView
+      await booted.ctx.collabWorkspaces.settleClone(WorkspaceId(created.id), { kind: 'cloned', clonePath: repo })
+      const emitSession = (id: string): void => {
+        booted.ctx.events.emit('session/created', { id, header: { cwd: repo } })
+      }
+      emitSession('sess-1')
+      await vi.waitFor(() => {
+        expect(currentBranchOf(repo)).toBe('Product-sess-1')
+      })
+      // Re-attaching the same session stays on its own line (no second fork),
+      // and a second session forks its own branch from there.
+      emitSession('sess-1')
+      await new Promise<void>(resolve => setImmediate(resolve))
+      expect(currentBranchOf(repo)).toBe('Product-sess-1')
+      emitSession('sess-2')
+      await vi.waitFor(() => {
+        expect(currentBranchOf(repo)).toBe('Product-sess-2')
+      })
+    } finally { rmSync(repo, { recursive: true, force: true }) }
+  })
+
+  it('does not fork a branch for a session outside any repo-backed clone', async () => {
+    const { booted } = await bootPlugin()
+    const repo = makeGitRepo()
+    try {
+      const created = value(await call(booted, booted.admin, 'collab/workspace.create', { name: 'Product' })) as CollabWorkspaceView
+      await booted.ctx.collabWorkspaces.settleClone(WorkspaceId(created.id), { kind: 'cloned', clonePath: repo })
+      booted.ctx.events.emit('session/created', { id: 'sess-x', header: { cwd: '/unrelated/dir' } })
+      await new Promise<void>(resolve => setImmediate(resolve))
+      expect(currentBranchOf(repo)).not.toMatch(/sess-x/)
+    } finally { rmSync(repo, { recursive: true, force: true }) }
+  })
+
+  it('logs a warning when the session-branch lookup itself fails', async () => {
+    const { booted } = await bootPlugin()
+    const warn = vi.spyOn(booted.ctx.logger, 'warn')
+    // A non-Error throw (e.g. a hostile service) exercises the string fallback.
+    vi.spyOn(booted.ctx.collabWorkspaces, 'workspaceHolding').mockImplementationOnce(() => {
+      throw 'lookup exploded'
+    })
+    booted.ctx.events.emit('session/created', { id: 'sess-y', header: { cwd: '/anywhere' } })
+    await vi.waitFor(() => {
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('failed to fork a session branch for \'sess-y\': lookup exploded'))
+    })
+  })
+
+  it('logs a warning when the session-branch lookup fails with an Error', async () => {
+    const { booted } = await bootPlugin()
+    const warn = vi.spyOn(booted.ctx.logger, 'warn')
+    vi.spyOn(booted.ctx.collabWorkspaces, 'workspaceHolding').mockImplementationOnce(() => {
+      throw new Error('lookup exploded')
+    })
+    booted.ctx.events.emit('session/created', { id: 'sess-z', header: { cwd: '/anywhere' } })
+    await vi.waitFor(() => {
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('failed to fork a session branch for \'sess-z\': lookup exploded'))
+    })
   })
 })
 

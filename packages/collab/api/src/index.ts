@@ -9,6 +9,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import type { Session } from '@deepseek-ai/dsh-session'
 import type { CollabPrincipal } from '@deepseek-ai/dsh-collab-auth'
 import { sessionTokenFromCookieHeader } from '@deepseek-ai/dsh-collab-auth'
 import type { ConnectionAuthenticatorFacts } from '@deepseek-ai/dsh-client-connection'
@@ -17,6 +18,7 @@ import { collabError } from './errors.ts'
 import { createCollabWorkspaceAccess } from './access-gate.ts'
 import { dispatchCollabEndpoint } from './dispatch.ts'
 import { cloneAuthFromConfig, installCollabSettings } from './settings.ts'
+import { forkCollabSessionBranch } from './sessions.ts'
 import type { CollabPrincipalView } from './types.ts'
 
 export const name = 'dsh-collab-api'
@@ -69,6 +71,21 @@ export function apply(ctx: Context, config: Config = {}): void {
   // when present, so a single-user composition that omits this overlay never
   // stages the decision.
   ctx.effect(() => ctx.provide('collabWorkspaceAccess', createCollabWorkspaceAccess(ctx)))
+  // Per-session work branches: a session that opens inside a settled
+  // repository-backed workspace switches the shared clone onto a branch named
+  // after that session, so its commits (and later pushes) stay on their own
+  // line. Fire-and-forget with a warn log: a fork must never hold up or fail
+  // session creation.
+  ctx.effect(() => ctx.on('session/created', (session: Session) => {
+    void forkCollabSessionBranch(ctx.collabWorkspaces, session).then((branch) => {
+      if (branch !== undefined) {
+        ctx.logger.debug(`collab: session '${session.id}' forked on branch '${branch}'`)
+      }
+    }).catch((error: unknown) => {
+      const reason = error instanceof Error ? error.message : String(error)
+      ctx.logger.warn(`collab: failed to fork a session branch for '${session.id}': ${reason}`)
+    })
+  }, { global: true }))
   // Auth fence: every `/api` request requires a signed session cookie. The
   // gate contract lives in client-connection; here we only provide identity.
   ctx.effect(() => {

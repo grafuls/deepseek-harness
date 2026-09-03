@@ -13,6 +13,7 @@
     "src/index.ts",
     "src/invariant.ts",
     "src/repo-state.ts",
+    "src/sessions.ts",
     "src/settings.ts",
     "src/types.ts"
   ],
@@ -25,6 +26,9 @@
     },
     {
       "path": "../../../vendor/schemastery"
+    },
+    {
+      "path": "../../core/session"
     },
     {
       "path": "../auth"

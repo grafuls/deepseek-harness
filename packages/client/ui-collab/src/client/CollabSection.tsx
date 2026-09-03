@@ -474,6 +474,15 @@ function CollabWorkspaceRow({ workspace, expanded, active, path, menuOpen, onTog
       {workspace.cloneState === 'cloning' && (
         <span className={css.cloneBadge}>{t('cloneCloning')}</span>
       )}
+      {workspace.gitState && (
+        <span
+          className={clsx(css.gitState, workspace.gitState.dirty && css.gitStateDirty)}
+          title={workspace.gitState.dirty ? t('gitUncommitted') : undefined}
+        >
+          {workspace.gitState.dirty && '● '}
+          {workspace.gitState.branch} · {workspace.gitState.sha}
+        </span>
+      )}
       <span className={css.meta}>{t('memberCount', { count: String(workspace.memberCount) })}</span>
       <span className={css.rowActions}>
         <Menu

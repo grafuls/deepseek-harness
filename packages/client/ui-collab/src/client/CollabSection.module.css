@@ -420,6 +420,19 @@
   font-size: 12px;
 }
 
+.gitState {
+  flex: none;
+  font-family: var(--dsw-font-family-mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+}
+
+.gitStateDirty {
+  color: var(--dsw-alias-state-warn-primary);
+}
+
 .meta {
   flex: none;
   font-size: 12px;

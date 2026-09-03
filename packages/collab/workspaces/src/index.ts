@@ -286,6 +286,7 @@ export class CollabWorkspaces extends Service {
           role: member.role,
           createdAt: record.createdAt,
           cloneState: cloneStateOf(record),
+          ...(record.clonePath === undefined ? {} : { clonePath: record.clonePath }),
         }
       })
   }

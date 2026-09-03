@@ -80,6 +80,12 @@ export interface WorkspaceSummary {
    * settled, `none` for a name-only workspace.
    */
   cloneState: CollabCloneState
+  /**
+   * Settled clone directory for a repository-bootstrapped workspace. A
+   * server-internal bridge to the API layer, which reads git state from it;
+   * view builders never forward it to the browser.
+   */
+  clonePath?: string
 }
 
 /** Lifecycle of a repository-bootstrapped workspace's background clone. */

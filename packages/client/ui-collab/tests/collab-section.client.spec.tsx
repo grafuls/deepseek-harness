@@ -216,6 +216,40 @@ describe('CollabSection', () => {
     expect(expandSidebar).toHaveBeenCalledTimes(1)
   })
 
+  it('lands in the search box once the collapsed rail flips wide', () => {
+    const expandSidebar = vi.fn()
+    const { container, rerender } = render((
+      <CollabSection
+        useCollabWorkspaces={sel => sel(readyState())}
+        useSessions={sel => sel(sessionState([]))}
+        useWorkspaces={sel => sel(hostState([]))}
+        actions={actions()}
+        t={t}
+        wide={false}
+        expandSidebar={expandSidebar}
+      />
+    ))
+    // The rail search arms the focus-on-expand flag and asks for the wide flip.
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+    expect(expandSidebar).toHaveBeenCalledTimes(1)
+    // The shell flips wide in place: the flag's effect focuses the now-mounted
+    // search input and clears itself, so the next flip does not re-focus.
+    rerender((
+      <CollabSection
+        useCollabWorkspaces={sel => sel(readyState())}
+        useSessions={sel => sel(sessionState([]))}
+        useWorkspaces={sel => sel(hostState([]))}
+        actions={actions()}
+        t={t}
+        wide={true}
+        expandSidebar={expandSidebar}
+      />
+    ))
+    const input = container.querySelector('input')
+    expect(input).not.toBeNull()
+    expect(document.activeElement).toBe(input)
+  })
+
   it('lists the member workspaces with their sessions inline and opens on click', () => {
     const open = vi.fn()
     section(
@@ -313,6 +347,17 @@ describe('CollabSection', () => {
     expect(screen.getByText('Cloning…')).toBeTruthy()
     const button = screen.getByRole('button', { name: 'New session in Alpha' }) as HTMLButtonElement
     expect(button.disabled).toBe(true)
+  })
+
+  it('shows the branch and commit of a settled clone on the workspace folder', () => {
+    section(readyState({ workspaces: [{ ...ALPHA, gitState: { branch: 'main', sha: 'a1b2c3', dirty: false } }] }))
+    expect(screen.getByText('main · a1b2c3')).toBeTruthy()
+  })
+
+  it('flags a workspace folder whose working tree has uncommitted changes', () => {
+    section(readyState({ workspaces: [{ ...ALPHA, gitState: { branch: 'feature/x', sha: 'dead12', dirty: true } }] }))
+    expect(screen.getByText('● feature/x · dead12')).toBeTruthy()
+    expect(screen.getByTitle('Uncommitted changes')).toBeTruthy()
   })
 
   it('starts a session from the row button even before the workspace is mounted', () => {

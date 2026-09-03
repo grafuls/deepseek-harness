@@ -12,6 +12,7 @@
     "src/errors.ts",
     "src/index.ts",
     "src/invariant.ts",
+    "src/repo-state.ts",
     "src/settings.ts",
     "src/types.ts"
   ],

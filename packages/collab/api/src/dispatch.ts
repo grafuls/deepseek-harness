@@ -20,9 +20,10 @@ import type {
   WorkspaceSummary,
 } from '@deepseek-ai/dsh-collab-workspaces'
 import { InvitationId as makeInvitationId, WorkspaceId as makeWorkspaceId } from '@deepseek-ai/dsh-collab-workspaces'
-import { cloneStateOf, type ClonedOutcome, type CloneSettlement } from '@deepseek-ai/dsh-collab-workspaces'
+import { cloneStateOf, type ClonedOutcome, type CloneSettlement, type CollabCloneState } from '@deepseek-ai/dsh-collab-workspaces'
 import { cloneDirectoryName, cloneRepository } from './clone.ts'
 import type { GitCloneCredentials, GitCommandRunner } from './clone.ts'
+import { gitStateOf } from './repo-state.ts'
 import { readCloneDir } from './settings.ts'
 import type {
   CollabInvitationForMeView,
@@ -34,6 +35,7 @@ import type {
   CollabUserView,
   CollabWorkspaceDirView,
   CollabWorkspaceView,
+  CollabGitWorkspaceState,
 } from './types.ts'
 import { collabError, type CollabErrorCode } from './errors.ts'
 
@@ -145,11 +147,11 @@ function principalView(principal: CollabPrincipal): CollabPrincipalView {
   }
 }
 
-function workspaceView(summary: WorkspaceSummary): CollabWorkspaceView {
-  return summary
+function workspaceView(summary: WorkspaceSummary): Promise<CollabWorkspaceView> {
+  return viewWithGitState(summary.id, summary.name, summary.memberCount, summary.isOwner, summary.role, summary.createdAt, summary.cloneState, summary.clonePath)
 }
 
-function recordView(record: WorkspaceRecord, viewer: string): CollabWorkspaceView {
+async function recordView(record: WorkspaceRecord, viewer: string): Promise<CollabWorkspaceView> {
   const membership = record.members.find(member => member.userId === viewer)
   // The read/leave guard has already proven the viewer is on this record;
   // create/join add the actor before this view runs, so a miss is an
@@ -157,15 +159,49 @@ function recordView(record: WorkspaceRecord, viewer: string): CollabWorkspaceVie
   /* v8 ignore start -- unreachable through the API (see above). */
   if (membership === undefined) throw new CollabWireError('collab-forbidden', `collab: no membership for '${viewer}' on '${record.id}'`)
   /* v8 ignore stop */
+  return viewWithGitState(record.id, record.name, record.members.length, record.ownerId === viewer, membership.role, record.createdAt, cloneStateOf(record), record.clonePath)
+}
+
+/**
+ * Build a {@link CollabWorkspaceView} from one workspace projection, reading
+ * the settled clone's git state when it has one. Absent git state is omitted
+ * from the wire view, so name-only and cloning rows carry nothing extra.
+ * @param id - the workspace id.
+ * @param name - the display name.
+ * @param memberCount - the number of members.
+ * @param isOwner - whether the viewer owns the workspace.
+ * @param role - the viewer's role.
+ * @param createdAt - the creation instant.
+ * @param cloneState - the repository-bootstrap lifecycle.
+ * @param clonePath - the settled clone directory, when the workspace has one.
+ * @returns the populated view.
+ */
+async function viewWithGitState(
+  id: string,
+  name: string,
+  memberCount: number,
+  isOwner: boolean,
+  role: WorkspaceRole,
+  createdAt: string,
+  cloneState: CollabCloneState,
+  clonePath: string | undefined,
+): Promise<CollabWorkspaceView> {
+  const gitState = await viewGitState(clonePath)
   return {
-    id: record.id,
-    name: record.name,
-    memberCount: record.members.length,
-    isOwner: record.ownerId === viewer,
-    role: membership.role,
-    createdAt: record.createdAt,
-    cloneState: cloneStateOf(record),
+    id,
+    name,
+    memberCount,
+    isOwner,
+    role,
+    createdAt,
+    cloneState,
+    ...(gitState === undefined ? {} : { gitState }),
   }
+}
+
+/** Read a clone's git state when a settled clone path exists, else absent. */
+function viewGitState(clonePath: string | undefined): Promise<CollabGitWorkspaceState | undefined> {
+  return clonePath === undefined ? Promise.resolve(undefined) : gitStateOf(clonePath)
 }
 
 function memberView(ctx: Context, member: WorkspaceMember): CollabMemberView {
@@ -218,8 +254,9 @@ ENDPOINTS.set('collab/auth.status', (_ctx, principal) => {
   return collabOk<CollabStatusView>({ authenticated: true, principal: principalView(principal) })
 })
 
-ENDPOINTS.set('collab/workspace.list', (ctx, principal) => {
-  return collabOk(ctx.collabWorkspaces.listFor(principal.userId).map(workspaceView))
+ENDPOINTS.set('collab/workspace.list', async (ctx, principal) => {
+  const views = await Promise.all(ctx.collabWorkspaces.listFor(principal.userId).map(workspaceView))
+  return collabOk(views)
 })
 
 ENDPOINTS.set('collab/workspace.create', async (ctx, principal, args) => {
@@ -227,15 +264,15 @@ ENDPOINTS.set('collab/workspace.create', async (ctx, principal, args) => {
   const repoUrl = optionalRepoUrl(args)
   if (repoUrl === undefined) {
     const record = await ctx.collabWorkspaces.create(principal.globalRole, principal.userId, name)
-    return collabOk(recordView(record, principal.userId))
+    return collabOk(await recordView(record, principal.userId))
   }
   const record = await createClonedWorkspace(ctx, principal, name, repoUrl)
-  return collabOk(recordView(record, principal.userId))
+  return collabOk(await recordView(record, principal.userId))
 })
 ENDPOINTS.set('collab/workspace.get', async (ctx, principal, args) => {
   const { wsId, role } = requireWorkspaceAndRole(ctx, principal, requireString(args, 'workspaceId', 'collab/workspace.get'))
   const record = await ctx.collabWorkspaces.get(role, principal.userId, wsId)
-  return collabOk(recordView(record, principal.userId))
+  return collabOk(await recordView(record, principal.userId))
 })
 
 ENDPOINTS.set('collab/workspace.members', async (ctx, principal, args) => {
@@ -379,7 +416,7 @@ ENDPOINTS.set('collab/workspace.revokeInvitation', async (ctx, principal, args) 
 ENDPOINTS.set('collab/workspace.join', async (ctx, principal, args) => {
   const invitationId = makeInvitationId(requireString(args, 'invitationId', 'collab/workspace.join'))
   const record = await ctx.collabWorkspaces.join(principal.globalRole, principal.userId, principal.email, invitationId)
-  return collabOk(recordView(record, principal.userId))
+  return collabOk(await recordView(record, principal.userId))
 })
 
 ENDPOINTS.set('collab/workspace.leave', async (ctx, principal, args) => {
@@ -424,7 +461,7 @@ ENDPOINTS.set('collab/workspace.rename', async (ctx, principal, args) => {
   if (mount !== undefined && mount.title !== record.name) {
     await mount.setTitle(record.name)
   }
-  return collabOk(recordView(record, principal.userId))
+  return collabOk(await recordView(record, principal.userId))
 })
 
 ENDPOINTS.set('collab/workspace.setMemberRole', async (ctx, principal, args) => {

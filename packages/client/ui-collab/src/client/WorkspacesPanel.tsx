@@ -168,6 +168,15 @@ function WorkspacesList({ state, actions, t }: {
           {workspace.cloneState === 'cloning' && (
             <span className={`${css.badge} ${css.cloneBadge}`}>{t('cloneCloning')}</span>
           )}
+          {workspace.gitState && (
+            <span
+              className={`${css.gitState} ${workspace.gitState.dirty ? css.gitStateDirty : ''}`}
+              title={workspace.gitState.dirty ? t('gitUncommitted') : undefined}
+            >
+              {workspace.gitState.dirty && '● '}
+              {workspace.gitState.branch} · {workspace.gitState.sha}
+            </span>
+          )}
           <span className={css.badge}>{roleLabel(t, workspace.role)}</span>
           <span className={css.rowMeta}>{t('memberCount', { count: String(workspace.memberCount) })}</span>
         </button>

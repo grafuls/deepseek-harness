@@ -43,6 +43,23 @@ export interface CollabWorkspaceView {
    * settled, `none` for a name-only workspace.
    */
   cloneState: CollabCloneState
+  /**
+   * Working-tree git state of a settled repository-backed workspace, read at
+   * view-build time for the shared clone. Present only while the clone is
+   * readably `ready`; absent for name-only or cloning workspaces and when the
+   * clone directory cannot be read.
+   */
+  gitState?: CollabGitWorkspaceState
+}
+
+/** The working-tree surface of a settled clone shown on a workspace row. */
+export interface CollabGitWorkspaceState {
+  /** Current branch name; empty when the checkout is detached. */
+  branch: string
+  /** Abbreviated HEAD commit. */
+  sha: string
+  /** Whether uncommitted changes (including untracked files) are present. */
+  dirty: boolean
 }
 
 /** Client-safe membership row, enriched from the user registry when present. */

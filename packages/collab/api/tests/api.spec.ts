@@ -6,7 +6,8 @@
 
 import type { IncomingHttpHeaders } from 'node:http'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { stat, writeFile } from 'node:fs/promises'
 import * as fsPromises from 'node:fs/promises'
 // Clone-root writability is checked with `access(W_OK)` at create; the check
@@ -18,6 +19,19 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   return { ...actual, access: accessMock }
 })
+
+/** Create a scratch git repository with one committed file, returning its path. */
+function makeGitRepo(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-api-git-'))
+  const git = (args: string[]): void => { execFileSync('git', ['-C', dir, ...args], { stdio: 'pipe' }) }
+  git(['init', '-q'])
+  git(['config', 'user.email', 'state-test@example.dev'])
+  git(['config', 'user.name', 'state test'])
+  writeFileSync(join(dir, 'file.txt'), 'one\n')
+  git(['add', '.'])
+  git(['commit', '-q', '-m', 'init'])
+  return dir
+}
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -354,6 +368,31 @@ describe('collab/workspace methods', () => {
     expect(mounted.dir).toBe(clonePath)
     expect(mounted.workspace).toMatchObject({ path: clonePath, title: 'Product' })
     expect(fake.createCalls).toEqual([{ path: clonePath, title: 'Product', collabWorkspaceId: created.id }])
+  })
+
+  it('surfaces readonly git state once a real repository clone settles', async () => {
+    const boot = await bootServices()
+    const repo = makeGitRepo()
+    try {
+      const created = value(await call(boot, boot.admin, 'collab/workspace.create', {
+        name: 'Repo',
+      })) as CollabWorkspaceView
+      // A name-only row carries no git state while it has no clone.
+      expect(created.cloneState).toBe('none')
+      expect('gitState' in created).toBe(false)
+      await boot.ctx.collabWorkspaces.settleClone(WorkspaceId(created.id), { kind: 'cloned', clonePath: repo })
+      const listed = value(await call(boot, boot.admin, 'collab/workspace.list', {})) as CollabWorkspaceView[]
+      const row = listed.find(entry => entry.id === created.id)
+      expect(row?.cloneState).toBe('ready')
+      expect(row?.gitState).toEqual(expect.objectContaining({ dirty: false, branch: expect.any(String), sha: expect.any(String) }))
+      const fetched = value(await call(boot, boot.admin, 'collab/workspace.get', { workspaceId: created.id })) as CollabWorkspaceView
+      expect(fetched.gitState?.dirty).toBe(false)
+      // A real working-tree edit flips the dirty flag on the next read.
+      writeFileSync(join(repo, 'file.txt'), 'two\n')
+      const stale = value(await call(boot, boot.admin, 'collab/workspace.list', {})) as CollabWorkspaceView[]
+      const edited = stale.find(entry => entry.id === created.id)
+      expect(edited?.gitState?.dirty).toBe(true)
+    } finally { rmSync(repo, { recursive: true, force: true }) }
   })
 
   it('refuses to open or resolve a provisioning workspace until the clone settles', async () => {

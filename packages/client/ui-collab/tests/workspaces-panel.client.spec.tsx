@@ -105,6 +105,17 @@ describe('WorkspacesPanel', () => {
     expect(screen.getByText('Alpha')).toBeTruthy()
   })
 
+  it('shows the branch and commit of a settled clone', () => {
+    panel(readyState({ workspaces: [{ ...WORKSPACE, gitState: { branch: 'main', sha: 'a1b2c3', dirty: false } }] }))
+    expect(screen.getByText('main · a1b2c3')).toBeTruthy()
+  })
+
+  it('flags a working tree with uncommitted changes', () => {
+    panel(readyState({ workspaces: [{ ...WORKSPACE, gitState: { branch: 'main', sha: 'a1b2c3', dirty: true } }] }))
+    expect(screen.getByText('● main · a1b2c3')).toBeTruthy()
+    expect(screen.getByTitle('Uncommitted changes')).toBeTruthy()
+  })
+
   it('shows the empty state with a working create affordance', () => {
     const create = vi.fn()
     panel(readyState({ workspaces: [] }), { create })

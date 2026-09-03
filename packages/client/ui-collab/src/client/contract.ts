@@ -53,6 +53,23 @@ export interface CollabWorkspaceView {
   createdAt: string
   /** Repository-bootstrap lifecycle (see {@link CollabCloneState}). */
   cloneState: CollabCloneState
+  /**
+   * Working-tree git state of a settled repository-backed workspace
+   * (present while the clone is ready and readable): branch, abbreviated
+   * HEAD, and whether uncommitted changes exist. Absent for name-only or
+   * cloning workspaces.
+   */
+  gitState?: CollabGitWorkspaceState
+}
+
+/** The working-tree surface of a settled clone shown on a workspace row. */
+export interface CollabGitWorkspaceState {
+  /** Current branch name; empty when the checkout is detached. */
+  branch: string
+  /** Abbreviated HEAD commit. */
+  sha: string
+  /** Whether uncommitted changes (including untracked files) are present. */
+  dirty: boolean
 }
 
 /** One workspace member. */

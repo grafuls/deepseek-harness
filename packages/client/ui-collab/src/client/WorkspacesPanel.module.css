@@ -127,18 +127,6 @@
   color: var(--dsw-alias-state-business-primary);
 }
 
-.gitState {
-  flex-shrink: 0;
-  font-family: var(--dsw-font-family-mono, ui-monospace, monospace);
-  font-size: 11px;
-  color: var(--dsw-alias-label-tertiary);
-  white-space: nowrap;
-}
-
-.gitStateDirty {
-  color: var(--dsw-alias-state-warn-primary);
-}
-
 .createRow {
   display: flex;
   gap: 8px;
@@ -271,21 +259,4 @@
   color: var(--dsw-alias-state-error-primary);
   font-size: 13px;
   cursor: pointer;
-}
-
-/* The repository-push block of a settled clone: the current branch chip, the
-   confirmation row with the loaded preview, and the pushed outcome links. */
-.repoBox {
-  margin-top: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.pushResult {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 13px;
-  color: var(--dsw-alias-label-primary);
 }

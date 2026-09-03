@@ -97,25 +97,6 @@ function roleLabel(t: WorkspacesPanelProps['t'], role: CollabRole): string {
   return role === 'admin' ? t('roleAdmin') : t('roleDeveloper')
 }
 
-/** Push-result copy from the collab.ui dictionary, per the push outcome kind. */
-function pushOutcomeCopy(t: WorkspacesPanelProps['t'], pushResult: CollabPushView): string {
-  if (pushResult.pushed) return t('pushedOk', { branch: pushResult.branch, sha: pushResult.remoteSha ?? pushResult.localSha })
-  if (pushResult.upToDate) return t('pushedUpToDate', { branch: pushResult.branch })
-  return t('pushPreviewOnly')
-}
-
-/** Confirmation-row copy: a branch label, the up-to-date notice, or the count preview. */
-function pushPreviewCopy(t: WorkspacesPanelProps['t'], preview: CollabPushView | undefined, branch: string): string {
-  if (preview === undefined) return t('pushConfirm', { branch: branch === '' ? t('currentBranch') : branch })
-  if (preview.upToDate) return t('pushUpToDate', { branch: preview.branch })
-  return t('pushPreview', {
-    branch: preview.branch,
-    base: preview.base,
-    ahead: String(preview.ahead ?? 0),
-    behind: String(preview.behind ?? 0),
-  })
-}
-
 /**
  * Render the workspaces manager overlay when the collab surface is ready and
  * the panel is open.
@@ -202,15 +183,6 @@ function WorkspacesList({ state, actions, t }: {
           {workspace.cloneState === 'cloning' && (
             <span className={`${css.badge} ${css.cloneBadge}`}>{t('cloneCloning')}</span>
           )}
-          {workspace.gitState && (
-            <span
-              className={`${css.gitState} ${workspace.gitState.dirty ? css.gitStateDirty : ''}`}
-              title={workspace.gitState.dirty ? t('gitUncommitted') : undefined}
-            >
-              {workspace.gitState.dirty && '● '}
-              {workspace.gitState.branch} · {workspace.gitState.sha}
-            </span>
-          )}
           <span className={css.badge}>{roleLabel(t, workspace.role)}</span>
           <span className={css.rowMeta}>{t('memberCount', { count: String(workspace.memberCount) })}</span>
         </button>
@@ -226,44 +198,10 @@ function WorkspaceDetail({ state, actions, t }: {
   actions: CollabWorkspacesActions
   t: WorkspacesPanelProps['t']
 }): ReactNode {
-  const selected = state.workspaces.find(workspace => workspace.id === state.selectedId)
   const isAdmin = state.myRole === 'admin'
   const [inviteOpen, setInviteOpen] = useState(false)
   const [email, setEmail] = useState('')
   const [inviteRole, setInviteRole] = useState<CollabRole>('developer')
-  // The push flow is confirm-gated: open loads a server dry-run preview into
-  // the dialog (a dry run cannot move a branch, so the server does not gate
-  // it), then the push fires only on the member's explicit confirm.
-  const [pushOpen, setPushOpen] = useState(false)
-  const [preview, setPreview] = useState<CollabPushView | undefined>(undefined)
-  const [pushResult, setPushResult] = useState<CollabPushView | undefined>(undefined)
-  const branch = selected?.gitState?.branch ?? ''
-  const openPush = (workspaceId: string): void => {
-    setPushResult(undefined)
-    setPreview(undefined)
-    setPushOpen(true)
-    void actions.previewPush(workspaceId, branch === '' ? undefined : branch).then(setPreview)
-  }
-  const confirmPush = (workspaceId: string): void => {
-    void actions.pushBranch(workspaceId, branch === '' ? undefined : branch).then((result) => {
-      if (result !== undefined) {
-        setPushResult(result)
-        setPushOpen(false)
-      }
-    })
-  }
-  // A successful sync fetches only remote-tracking refs, so the branch chip
-  // and dirty marker do not change; the list refresh keeps the manager honest
-  // and the transient note acknowledges the action.
-  const [synced, setSynced] = useState(false)
-  const syncWorkspace = (workspaceId: string): void => {
-    void actions.syncWorkspace(workspaceId).then((result) => {
-      if (result === undefined) return
-      setSynced(true)
-      actions.refresh()
-      window.setTimeout(() => { setSynced(false) }, 2200)
-    })
-  }
   const submitInvite = (): void => {
     actions.invite(email, inviteRole)
     setEmail('')
@@ -328,43 +266,6 @@ function WorkspaceDetail({ state, actions, t }: {
       )}
       {isAdmin && (
         <button type="button" className={css.deleteButton} onClick={actions.deleteSelected}>{t('deleteWorkspace')}</button>
-      )}
-      {selected !== undefined && selected.cloneState === 'ready' && (
-        <div className={css.repoBox}>
-          <h2 className={css.sectionTitle}>{t('repository')}</h2>
-          {branch !== '' && (
-            <div
-              className={`${css.gitState} ${selected.gitState?.dirty ? css.gitStateDirty : ''}`}
-              title={selected.gitState?.dirty ? t('gitUncommitted') : undefined}
-            >
-              {selected.gitState?.dirty && '● '}
-              {branch}
-            </div>
-          )}
-          {pushResult !== undefined ? (
-            <div className={css.pushResult}>
-              <span>{pushOutcomeCopy(t, pushResult)}</span>
-              {pushResult.compareUrl && (
-                <a href={pushResult.compareUrl} target="_blank" rel="noreferrer" className={css.linkButton}>{t('openCompare')}</a>
-              )}
-              {pushResult.prUrl && (
-                <a href={pushResult.prUrl} target="_blank" rel="noreferrer" className={css.linkButton}>{t('openPullRequest')}</a>
-              )}
-            </div>
-          ) : pushOpen ? (
-            <div className={css.createRow}>
-              <span>{pushPreviewCopy(t, preview, branch)}</span>
-              <button type="button" className={css.primaryButton} disabled={state.working || preview?.upToDate === true} onClick={() => { confirmPush(selected.id) }}>{t('push')}</button>
-              <button type="button" className={css.dangerButton} disabled={state.working} onClick={() => { setPushOpen(false); setPreview(undefined) }}>{t('cancel')}</button>
-            </div>
-          ) : (
-            <div className={css.createRow}>
-              <button type="button" className={css.createButton} onClick={() => { openPush(selected.id) }}>{t('pushBranch')}</button>
-              <button type="button" className={css.createButton} disabled={state.working} onClick={() => { syncWorkspace(selected.id) }}>{t('syncBranch')}</button>
-              {synced && <span className={css.pushResult}>{t('syncedOk')}</span>}
-            </div>
-          )}
-        </div>
       )}
     </div>
   )

@@ -420,17 +420,14 @@
   font-size: 12px;
 }
 
-.gitState {
-  flex: none;
+/* A session's work-branch name on its hover card, in the same mono treatment
+   the workspace row's old git chip used. */
+.hoverBranch {
   font-family: var(--dsw-font-family-mono, ui-monospace, monospace);
   font-size: 11px;
-  line-height: 20px;
+  line-height: 16px;
   color: var(--dsw-alias-label-tertiary);
-  white-space: nowrap;
-}
-
-.gitStateDirty {
-  color: var(--dsw-alias-state-warn-primary);
+  word-break: break-all;
 }
 
 .meta {
@@ -660,6 +657,52 @@
   font-size: 12px;
   line-height: 18px;
   color: var(--dsw-alias-state-danger-primary);
+}
+
+/* Session-sync notice above the list: a transient okay line or a folded
+   failure banner, mirroring the manager's transient note. */
+.sessionNotice {
+  margin: 8px 12px 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 18px;
+  background: var(--dsw-alias-state-success-tertiary, rgba(46, 160, 67, 0.12));
+  color: var(--dsw-alias-state-success-primary, #2ea043);
+}
+
+.sessionNoticeError {
+  background: var(--dsw-alias-state-danger-tertiary, rgba(248, 81, 73, 0.12));
+  color: var(--dsw-alias-state-danger-primary);
+}
+
+/* Session push dialog body: the dry-run confirmation line (or the outcome
+   copy) and the compare / pull-request links. */
+.pushDialogBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pushPreviewLine {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+  overflow-wrap: break-word;
+}
+
+.pushOutcome {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.linkButton {
+  align-self: flex-start;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-state-info-primary);
+  text-decoration: underline;
 }
 
 @media (prefers-reduced-motion: reduce) {

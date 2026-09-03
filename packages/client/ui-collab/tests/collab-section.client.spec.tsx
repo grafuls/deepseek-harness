@@ -352,15 +352,25 @@ describe('CollabSection', () => {
     expect(button.disabled).toBe(true)
   })
 
-  it('shows the branch and commit of a settled clone on the workspace folder', () => {
-    section(readyState({ workspaces: [{ ...ALPHA, gitState: { branch: 'main', sha: 'a1b2c3', dirty: false } }] }))
-    expect(screen.getByText('main · a1b2c3')).toBeTruthy()
-  })
-
-  it('flags a workspace folder whose working tree has uncommitted changes', () => {
-    section(readyState({ workspaces: [{ ...ALPHA, gitState: { branch: 'feature/x', sha: 'dead12', dirty: true } }] }))
-    expect(screen.getByText('● feature/x · dead12')).toBeTruthy()
-    expect(screen.getByTitle('Uncommitted changes')).toBeTruthy()
+  it('keeps branch and commit off the workspace row and its hover card (each session carries its own line)', () => {
+    vi.useFakeTimers()
+    try {
+      // The workspace is not a git surface: even with the wire gitState on the
+      // view, neither the row nor the hover card may surface branch/sha/dirty
+      // — those belong to the session rows (Request 2).
+      const gitState = { branch: 'main', sha: 'a1b2c3', dirty: true }
+      section(readyState({ workspaces: [{ ...ALPHA, gitState }] }))
+      expect(screen.queryByText('main · a1b2c3')).toBeNull()
+      expect(screen.queryByText('Uncommitted changes')).toBeNull()
+      const wrapper = screen.getByRole('treeitem', { name: 'Alpha' }).parentElement as HTMLElement
+      fireEvent.pointerEnter(wrapper)
+      act(() => { vi.advanceTimersByTime(500) })
+      expect(screen.queryByText('main · a1b2c3')).toBeNull()
+      expect(screen.queryByText('Uncommitted changes')).toBeNull()
+      fireEvent.pointerLeave(wrapper)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('starts a session from the row button even before the workspace is mounted', () => {
@@ -599,7 +609,7 @@ describe('CollabSection', () => {
     expect(row.querySelectorAll('span').length).toBeGreaterThan(0)
   })
 
-  it('offers Rename/Fork/Archive on a non-blank session row through its hover menu', () => {
+  it('offers Rename/Fork/Archive plus Push/Sync on a non-blank session row through its hover menu', () => {
     section(
       readyState(),
       {},
@@ -612,6 +622,117 @@ describe('CollabSection', () => {
     expect(screen.getByRole('menuitem', { name: 'Rename' })).toBeTruthy()
     expect(screen.getByRole('menuitem', { name: 'Fork' })).toBeTruthy()
     expect(screen.getByRole('menuitem', { name: 'Archive session' })).toBeTruthy()
+    // Alpha's repo-backed clone is settled, so its session rows also carry the
+    // git verbs, routed at the session level (not the workspace level).
+    expect(screen.getByRole('menuitem', { name: 'Push branch' })).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: 'Sync' })).toBeTruthy()
+  })
+
+  it('carries no Push/Sync (and no hover branch) on sessions of a name-only workspace', () => {
+    vi.useFakeTimers()
+    try {
+      // `cloneState: 'none'` means the workspace has no repository to push or
+      // sync, so the session rows fall back to the plain Rename/Fork/Archive
+      // menu and the hover card shows no branch line.
+      section(
+        readyState({ workspaces: [{ ...ALPHA, cloneState: 'none' }] }),
+        {},
+        { sessions: [sessionSummary('s1', 5)], workspaces: [hostWorkspace('hw1', 'w1', ['s1'], 'Alpha')] },
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Session actions for s1' }))
+      expect(screen.getByRole('menuitem', { name: 'Rename' })).toBeTruthy()
+      expect(screen.queryByRole('menuitem', { name: 'Push branch' })).toBeNull()
+      expect(screen.queryByRole('menuitem', { name: 'Sync' })).toBeNull()
+      fireEvent.keyDown(document, { key: 'Escape' })
+      const row = screen.getByRole('treeitem', { name: 's1' })
+      fireEvent.pointerEnter(row.parentElement as HTMLElement)
+      act(() => { vi.advanceTimersByTime(500) })
+      expect(screen.queryByText(/^Branch: /)).toBeNull()
+      fireEvent.pointerLeave(row.parentElement as HTMLElement)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('names the session work branch on the session hover card', () => {
+    vi.useFakeTimers()
+    try {
+      section(
+        readyState(),
+        {},
+        { sessions: [sessionSummary('s1', 5)], workspaces: [hostWorkspace('hw1', 'w1', ['s1'], 'Alpha')] },
+      )
+      // The line derives from the settled clone's workspace name + session id,
+      // mirroring the branch the host forks on session/created.
+      expect(screen.queryByText('Branch: Alpha-s1')).toBeNull()
+      const row = screen.getByRole('treeitem', { name: 's1' })
+      fireEvent.pointerEnter(row.parentElement as HTMLElement)
+      act(() => { vi.advanceTimersByTime(500) })
+      expect(screen.getByText('Branch: Alpha-s1')).toBeTruthy()
+      fireEvent.pointerLeave(row.parentElement as HTMLElement)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('pushes a session branch from its row menu through the confirm-gated dialog', async () => {
+    const previewPush = vi.fn(async () => ({
+      pushed: false, upToDate: false, branch: 'Alpha-s1', base: 'main',
+      localSha: 'cafe01', ahead: 3, behind: 0, remote: 'https://github.com/acme/repo',
+      compareUrl: 'https://github.com/acme/repo/compare/main...Alpha-s1',
+    }))
+    const pushBranch = vi.fn(async () => ({
+      pushed: true, upToDate: false, branch: 'Alpha-s1', base: 'main',
+      localSha: 'cafe01', remoteSha: 'cafe01', remote: 'https://github.com/acme/repo',
+      compareUrl: 'https://github.com/acme/repo/compare/main...Alpha-s1',
+    }))
+    section(
+      readyState(),
+      { previewPush, pushBranch },
+      { sessions: [sessionSummary('s1', 5)], workspaces: [hostWorkspace('hw1', 'w1', ['s1'], 'Alpha')] },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Session actions for s1' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Push branch' }))
+    // Opening the verb routes the dry run at the session's own line.
+    await waitFor(() => { expect(previewPush).toHaveBeenCalledWith('w1', 'Alpha-s1') })
+    await waitFor(() => { expect(screen.getByText(/Push Alpha-s1 to main/)).toBeTruthy() })
+    // The member's confirm fires the push to the same branch.
+    fireEvent.click(screen.getByRole('button', { name: 'Push' }))
+    await waitFor(() => { expect(pushBranch).toHaveBeenCalledWith('w1', 'Alpha-s1') })
+    // The outcome keeps the dialog open with its compare link until Close.
+    await waitFor(() => { expect(screen.getByText(/Pushed Alpha-s1/)).toBeTruthy() })
+    expect(screen.getByRole('link', { name: 'Compare' })).toBeTruthy()
+    // The dialog has a header close and a footer confirm-close, both labeled
+    // Close; closing through the footer one dismisses the dialog.
+    const dialogs = screen.getAllByRole('button', { name: 'Close' })
+    fireEvent.click(dialogs[dialogs.length - 1]!)
+    await waitFor(() => { expect(screen.queryByRole('dialog')).toBeNull() })
+  })
+
+  it('syncs a session branch from its row menu and acknowledges the fetch', async () => {
+    const syncWorkspace = vi.fn(async () => ({ fetched: true }))
+    section(
+      readyState(),
+      { syncWorkspace },
+      { sessions: [sessionSummary('s1', 5)], workspaces: [hostWorkspace('hw1', 'w1', ['s1'], 'Alpha')] },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Session actions for s1' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Sync' }))
+    await waitFor(() => { expect(syncWorkspace).toHaveBeenCalledWith('w1') })
+    await waitFor(() => { expect(screen.getByText('Fetched the latest remote state')).toBeTruthy() })
+  })
+
+  it('surfaces a folded sync failure as an alert above the list', async () => {
+    const syncWorkspace = vi.fn(async () => undefined as { fetched: boolean } | undefined)
+    section(
+      readyState(),
+      { syncWorkspace },
+      { sessions: [sessionSummary('s1', 5)], workspaces: [hostWorkspace('hw1', 'w1', ['s1'], 'Alpha')] },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Session actions for s1' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Sync' }))
+    await waitFor(() => { expect(syncWorkspace).toHaveBeenCalledWith('w1') })
+    await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe('Sync failed') })
   })
 
   it('carries no hover menu on a blank New Session placeholder', () => {

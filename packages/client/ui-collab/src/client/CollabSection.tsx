@@ -22,8 +22,8 @@ import {
   Button, HoverCard, IconArchiveOutline20, IconBranchOutline16, IconCloseFill14,
   IconEditOutline16, IconEllipsisOutline16, IconFolderClose16, IconFolderOpen16,
   IconPersonalizationOutline16, IconPlusOutline16, IconProjectAddOutline16,
-  IconSearchOutline16, IconTrashOutline16, IconTriangleRightFill14, Menu,
-  Modal, StateDot, Tooltip,
+  IconRefreshOutline16, IconRightUpOutline16, IconSearchOutline16, IconTrashOutline16,
+  IconTriangleRightFill14, Menu, Modal, StateDot, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   SessionId, SessionSummary, WorkspaceView,
@@ -37,7 +37,9 @@ import {
 } from './collab-rows.ts'
 import { nextCollabSessionOrder } from './collab-order.ts'
 import { CreateWorkspace } from './CreateWorkspace.tsx'
-import type { CollabWorkspaceView } from './contract.ts'
+import type { CollabPushView, CollabWorkspaceView } from './contract.ts'
+import { pushOutcomeCopy, pushPreviewCopy } from './push-copy.ts'
+import { sessionBranchName } from './session-branch.ts'
 import type { NS } from './locales.ts'
 import type { CollabGroupBy, CollabOrderBy } from './store.ts'
 import type { CollabWorkspacesActions, CollabWorkspacesInjected } from './WorkspacesPanel.tsx'
@@ -264,10 +266,12 @@ function CollabSessionStatusDots({ statuses }: { statuses: readonly [CollabSessi
   )
 }
 
-/** Hover-card body for a collab session row: title, relative time, statuses. */
-function CollabSessionHoverContent({ summary, now, t }: {
+/** Hover-card body for a collab session row: title, the session's work branch, relative time, statuses. */
+function CollabSessionHoverContent({ summary, now, branch, t }: {
   summary: SessionSummary
   now: number
+  /** The session's work-branch name under a repo-backed workspace; absent otherwise. */
+  branch: string | undefined
   t: CollabRowTranslate
 }) {
   const title = collabSessionTitle(summary, t)
@@ -278,6 +282,7 @@ function CollabSessionHoverContent({ summary, now, t }: {
       {/* Same placeholder rule as the row's trailing cell: no timestamp
           before the first prompt. */}
       {!summary.blank && <div className={css.hoverTime}>{hoverTimeLabel(summary.updatedAt, now, t)}</div>}
+      {branch !== undefined && <div className={css.hoverBranch}>{t('branch')}: {branch}</div>}
       {statuses.map(status => (
         <div className={css.hoverStatus} key={status.label}>
           <StateDot state={status.state} />
@@ -313,7 +318,7 @@ function CollabWorkspaceHoverContent({ label, path, count, createdAt, t }: {
  * highlight, and a hover card. Drag wiring (same-workspace markers only) is
  * what lets members reorder the shared order.
  */
-function CollabSessionRow({ summary, current, now, onOpen, drag, flat = false, onRename, onFork, onArchive, t }: {
+function CollabSessionRow({ summary, current, now, onOpen, drag, flat = false, branch, onPush, onSync, onRename, onFork, onArchive, t }: {
   summary: SessionSummary
   current: SessionId | undefined
   now: number
@@ -321,6 +326,12 @@ function CollabSessionRow({ summary, current, now, onOpen, drag, flat = false, o
   /** The row's drag wiring (every collab session row is draggable). */
   drag: CollabRowDragProps
   flat?: boolean
+  /** The session's work-branch name under a repo-backed workspace; enables the branch hover line and the push/sync verbs. */
+  branch: string | undefined
+  /** Open the confirm-gated push dialog for the session's branch. */
+  onPush: ((sessionId: SessionId) => void) | undefined
+  /** Fetch the origin into the shared clone for the session's line. */
+  onSync: ((sessionId: SessionId) => void) | undefined
   /** Open the browser-owned rename dialog seeded with the current title. */
   onRename: (sessionId: SessionId, currentTitle: string) => void
   /** Fork the shared session into a child and open it. */
@@ -338,12 +349,21 @@ function CollabSessionRow({ summary, current, now, onOpen, drag, flat = false, o
   // state survives the HoverCard's pointer capture; an open menu pins the
   // reveal and suppresses the card.
   const [menuOpen, setMenuOpen] = useState(false)
-  // The three declared ids are the whole domain the Menu can hand back.
+  // The five declared ids are the whole domain the Menu can hand back. The
+  // git verbs exist only for a session whose repo-backed clone supplies a
+  // branch; a blank placeholder or a name-only workspace carries no line to
+  // push or sync.
   const sessionMenuItems = [
     { id: 'rename', label: t('rename'), icon: <IconEditOutline16 /> },
     { id: 'fork', label: t('fork'), icon: <IconBranchOutline16 /> },
     // 20-native glyph in the menu's 16px icon slot.
     { id: 'archive', label: t('archiveSession'), icon: <IconArchiveOutline20 size={16} /> },
+    ...(branch !== undefined
+      ? [
+        { id: 'push', label: t('pushBranch'), icon: <IconRightUpOutline16 /> },
+        { id: 'sync', label: t('syncBranch'), icon: <IconRefreshOutline16 /> },
+      ]
+      : []),
   ]
   const ownRow = (
     <div
@@ -393,11 +413,13 @@ function CollabSessionRow({ summary, current, now, onOpen, drag, flat = false, o
             items={sessionMenuItems}
             onSelect={(id) => {
               setMenuOpen(false)
-              // The three declared ids are the whole domain the Menu hands
+              // The five declared ids are the whole domain the Menu hands
               // back; each routes to its row callback.
               if (id === 'rename') onRename(summary.id, summary.displayTitle)
               if (id === 'fork') onFork(summary.id)
               if (id === 'archive') onArchive(summary.id)
+              if (id === 'push' && onPush !== undefined) onPush(summary.id)
+              if (id === 'sync' && onSync !== undefined) onSync(summary.id)
             }}
             portal
             closeOnPointerLeave
@@ -419,7 +441,7 @@ function CollabSessionRow({ summary, current, now, onOpen, drag, flat = false, o
   return (
     <HoverCard
       anchor={ownRow}
-      content={<CollabSessionHoverContent summary={summary} now={now} t={t} />}
+      content={<CollabSessionHoverContent summary={summary} now={now} branch={branch} t={t} />}
       disabled={menuOpen || drag.active === true}
       copyText={summary.blank ? undefined : summary.displayTitle}
       copyLabel={t('copy')}
@@ -473,15 +495,6 @@ function CollabWorkspaceRow({ workspace, expanded, active, path, menuOpen, onTog
       </span>
       {workspace.cloneState === 'cloning' && (
         <span className={css.cloneBadge}>{t('cloneCloning')}</span>
-      )}
-      {workspace.gitState && (
-        <span
-          className={clsx(css.gitState, workspace.gitState.dirty && css.gitStateDirty)}
-          title={workspace.gitState.dirty ? t('gitUncommitted') : undefined}
-        >
-          {workspace.gitState.dirty && '● '}
-          {workspace.gitState.branch} · {workspace.gitState.sha}
-        </span>
       )}
       <span className={css.meta}>{t('memberCount', { count: String(workspace.memberCount) })}</span>
       <span className={css.rowActions}>
@@ -712,6 +725,64 @@ export function CollabSection({
     setWorkspaceRenameError(null)
   }
 
+  // Session push dialog (browser-owned, mirroring the workspaces manager's
+  // confirm-gated flow): opening a session's Push verb starts a server dry-run
+  // preview, the member confirms the push, and the outcome keeps the dialog
+  // open with its compare and pull-request links.
+  const [pushTarget, setPushTarget] = useState<{ workspaceId: string; branch: string } | null>(null)
+  const [pushPreview, setPushPreview] = useState<CollabPushView | undefined>(undefined)
+  const [pushResult, setPushResult] = useState<CollabPushView | undefined>(undefined)
+  const [pushBusy, setPushBusy] = useState(false)
+  const [pushError, setPushError] = useState<string | null>(null)
+  const openSessionPush = (workspaceId: string, branch: string): void => {
+    setPushResult(undefined)
+    setPushPreview(undefined)
+    setPushError(null)
+    setPushTarget({ workspaceId, branch })
+    setPushBusy(true)
+    void actions.previewPush(workspaceId, branch).then((preview) => {
+      setPushPreview(preview)
+      setPushBusy(false)
+      // A folded preview failure returns undefined; the dialog reports the
+      // generic failure rather than reverting to the pre-preview confirm copy.
+      if (preview === undefined) setPushError(t('errorFailed'))
+    })
+  }
+  const closeSessionPush = (): void => {
+    if (pushBusy) return
+    setPushTarget(null)
+    setPushPreview(undefined)
+    setPushResult(undefined)
+    setPushError(null)
+  }
+  const confirmSessionPush = (): void => {
+    if (pushTarget === null || pushBusy || pushPreview?.upToDate === true) return
+    setPushBusy(true)
+    setPushError(null)
+    void actions.pushBranch(pushTarget.workspaceId, pushTarget.branch).then((result) => {
+      setPushBusy(false)
+      if (result !== undefined) {
+        setPushResult(result)
+      } else {
+        setPushPreview(undefined)
+        setPushError(t('errorFailed'))
+      }
+    })
+  }
+
+  // Session sync notice: a transient line above the list acknowledging a
+  // fetch, or surfacing a folded failure. No timer — the next git verb (or a
+  // dialog open) replaces it, mirroring the collapsed-rail search state.
+  const [syncNote, setSyncNote] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
+  const runSessionSync = (workspaceId: string): void => {
+    setSyncNote(null)
+    void actions.syncWorkspace(workspaceId).then((result) => {
+      setSyncNote(result === undefined
+        ? { kind: 'error', text: t('syncFailed') }
+        : { kind: 'ok', text: t('syncedOk') })
+    })
+  }
+
   // Session drag: the per-workspace insert-marker state (source identity plus
   // the current hover target), mirroring the browsing region's row drag.
   // Rows only ever receive markers within their own workspace, because collab
@@ -779,6 +850,15 @@ export function CollabSection({
     // A workspace without a mount has no order to show (no sessions yet).
     return ordersByWorkspace.get(workspace.id) ?? []
   }
+
+  /**
+   * The branch a session runs on, when its workspace's repo-backed clone has
+   * settled: session lines exist only for ready clones (a name-only workspace
+   * has no repository to fork from), so `undefined` there keeps the branch
+   * hover line and the push/sync verbs off those sessions.
+   */
+  const sessionBranch = (workspace: CollabWorkspaceView, sessionId: SessionId): string | undefined =>
+    workspace.cloneState === 'ready' ? sessionBranchName(workspace.name, sessionId) : undefined
 
   // Per-workspace drag commit arms: the account order and mount id captured at
   // render, in workspace order. A workspace without a mount renders no session
@@ -947,6 +1027,15 @@ export function CollabSection({
         </div>
       )}
 
+      {syncNote !== null && (
+        <div
+          className={clsx(css.sessionNotice, syncNote.kind === 'error' && css.sessionNoticeError)}
+          role={syncNote.kind === 'error' ? 'alert' : undefined}
+        >
+          {syncNote.text}
+        </div>
+      )}
+
       <div className={css.listArea}>
         {state.workspaces.length === 0 && state.invitationsForMe.length === 0 && (
           <div className={css.empty}>{t('empty')}</div>
@@ -961,6 +1050,8 @@ export function CollabSection({
                 // A flat session's owner workspace is mounted by construction
                 // (rows only stem from mounts), so its drag arm always exists.
                 const commitDrag = commitsByWorkspace.get(entry.workspaceId)!
+                const workspace = state.workspaces.find(candidate => candidate.id === entry.workspaceId)
+                const branch = workspace === undefined ? undefined : sessionBranch(workspace, entry.summary.id)
                 return (
                   <CollabSessionRow
                     key={entry.summary.id}
@@ -972,6 +1063,9 @@ export function CollabSection({
                       sessionDrag, entry.workspaceId, entry.summary.id,
                       commitDrag, setSessionDrag, sessionDropCommitted,
                     )}
+                    branch={branch}
+                    onPush={branch === undefined ? undefined : () => { openSessionPush(entry.workspaceId, branch) }}
+                    onSync={branch === undefined ? undefined : () => { runSessionSync(entry.workspaceId) }}
                     onRename={onSessionRename}
                     onFork={(id) => { actions.forkSession(id) }}
                     onArchive={onSessionArchive}
@@ -1019,26 +1113,32 @@ export function CollabSection({
                       onNewSession={() => { actions.openWorkspace(workspace.id) }}
                       t={t}
                     />
-                    {expanded && shownSessions.map(summary => (
-                      <CollabSessionRow
-                        key={summary.id}
-                        summary={summary}
-                        current={sessionsState.current}
-                        now={now}
-                        onOpen={actions.open}
-                        drag={buildRowDragProps(
-                          sessionDrag, workspace.id, summary.id,
-                          // Session rows only render for a mounted workspace,
-                          // so its drag arm exists (see the guard above).
-                          commitsByWorkspace.get(workspace.id)!,
-                          setSessionDrag, sessionDropCommitted,
-                        )}
-                        onRename={onSessionRename}
-                        onFork={(id) => { actions.forkSession(id) }}
-                        onArchive={onSessionArchive}
-                        t={t}
-                      />
-                    ))}
+                    {expanded && shownSessions.map(summary => {
+                      const branch = sessionBranch(workspace, summary.id)
+                      return (
+                        <CollabSessionRow
+                          key={summary.id}
+                          summary={summary}
+                          current={sessionsState.current}
+                          now={now}
+                          onOpen={actions.open}
+                          drag={buildRowDragProps(
+                            sessionDrag, workspace.id, summary.id,
+                            // Session rows only render for a mounted workspace,
+                            // so its drag arm exists (see the guard above).
+                            commitsByWorkspace.get(workspace.id)!,
+                            setSessionDrag, sessionDropCommitted,
+                          )}
+                          branch={branch}
+                          onPush={branch === undefined ? undefined : () => { openSessionPush(workspace.id, branch) }}
+                          onSync={branch === undefined ? undefined : () => { runSessionSync(workspace.id) }}
+                          onRename={onSessionRename}
+                          onFork={(id) => { actions.forkSession(id) }}
+                          onArchive={onSessionArchive}
+                          t={t}
+                        />
+                      )
+                    })}
                     {expanded && sessionIds.length > COLLAPSED_SESSION_LIMIT && (
                       <button
                         type="button"
@@ -1124,6 +1224,42 @@ export function CollabSection({
           }}
         />
         {workspaceRenameError !== null && <div className={css.renameError} role="alert">{workspaceRenameError}</div>}
+      </Modal>
+
+      <Modal
+        open={pushTarget !== null}
+        onClose={closeSessionPush}
+        closeLabel={t('close')}
+        title={t('pushSessionTitle', { branch: pushTarget?.branch ?? '' })}
+        footer={pushResult !== undefined ? (
+          <Button variant="primary" onClick={closeSessionPush}>{t('close')}</Button>
+        ) : (
+          <>
+            <Button variant="outline" disabled={pushBusy} onClick={closeSessionPush}>{t('cancel')}</Button>
+            <Button variant="primary" disabled={pushBusy || pushPreview?.upToDate === true} onClick={confirmSessionPush}>{t('push')}</Button>
+          </>
+        )}
+      >
+        {pushTarget !== null && (
+          <div className={css.pushDialogBody}>
+            {pushResult !== undefined ? (
+              <>
+                <div className={css.pushOutcome}>{pushOutcomeCopy(t, pushResult)}</div>
+                {pushResult.compareUrl !== undefined && (
+                  <a href={pushResult.compareUrl} target="_blank" rel="noreferrer" className={css.linkButton}>{t('openCompare')}</a>
+                )}
+                {pushResult.prUrl !== undefined && (
+                  <a href={pushResult.prUrl} target="_blank" rel="noreferrer" className={css.linkButton}>{t('openPullRequest')}</a>
+                )}
+              </>
+            ) : (
+              <>
+                <div className={css.pushPreviewLine}>{pushPreviewCopy(t, pushPreview, pushTarget.branch)}</div>
+                {pushError !== null && <div className={css.renameError} role="alert">{pushError}</div>}
+              </>
+            )}
+          </div>
+        )}
       </Modal>
     </div>
   )

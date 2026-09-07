@@ -29,4 +29,4 @@ collab 覆盖层挂载了一个可选的成员资格门，Host API 代理在每�
 
 ## Consequences
 
-Host 平面只为成员提供每个已挂载的 collab 工作区及其内部绑定的会话，而普通 Host 工作区对每个已认证调用者依旧可见。成员资格按请求取样、在流打开时取样，因此授予与撤销作用于新的请求与新的流，而不是已在进行中的帧。两条实时回显按设计仍是进程全局的，并作为 Known Limitation 记录而非悄悄加门：`host()` 的归档会话回显与 `mux()` 的任务/队列/问题基线仍可能携带调用者看不见的会话的工作区 id、会话 id 或任务状态，但不会携带任何会话内容，而枚举表面（`workspace.list`、`sessions.list`/`search`、`history`、`fork`）已被完全划定作用域。
+Host 平面只为成员提供每个已挂载的 collab 工作区及其内部绑定的会话，而普通 Host 工作区对每个已认证调用者依旧可见。克隆到 workspaces 布局之内的仓库备份工作区（未设置克隆目录时的默认情况）通过工作区记录，而不是借助其 `<repo>-<workspaceId>` 目录名，限定到真实的工作区 id，因此成员——包括 `developer` 角色的用户——可以在其中创建会话（[克隆目录作用域](2026-09-07-collab-clone-layout-membership-scoping.zh.md)）。成员资格按请求取样、在流打开时取样，因此授予与撤销作用于新的请求与新的流，而不是已在进行中的帧。两条实时回显按设计仍是进程全局的，并作为 Known Limitation 记录而非悄悄加门：`host()` 的归档会话回显与 `mux()` 的任务/队列/问题基线仍可能携带调用者看不见的会话的工作区 id、会话 id 或任务状态，但不会携带任何会话内容，而枚举表面（`workspace.list`、`sessions.list`/`search`、`history`、`fork`）已被完全划定作用域。

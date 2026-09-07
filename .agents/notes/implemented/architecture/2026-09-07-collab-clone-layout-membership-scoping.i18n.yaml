@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-07-collab-clone-layout-membership-scoping.md
+2026-09-07-collab-clone-layout-membership-scoping.md: b2dd99f5a4b11c8f76f21fd988dd347f72948eb0
+2026-09-07-collab-clone-layout-membership-scoping.zh.md: a731e744666e04d5c5c725f33da1a6d873be8da6

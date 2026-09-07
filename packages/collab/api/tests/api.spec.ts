@@ -1967,4 +1967,28 @@ describe('collab workspace access gate', () => {
     // Paths outside every collab clone stay Host-owned.
     expect(gate.allow(stranger, join(boot.root, 'plain-workspace'))).toBe(true)
   })
+
+  it('scopes a repo-backed workspace cloned inside the data-root layout to its members', async () => {
+    const boot = await bootServices()
+    // The default clone location (cloneDir unset) places the clone directly
+    // under `<root>/workspaces`, with a directory name of `<repo>-<workspaceId>`
+    // rather than the plain workspace id. The records must still scope the path
+    // to the true workspace id, not the directory name, so a member (including
+    // a developer) can create a session in the clone.
+    const id = WorkspaceId('repo-ws-inside')
+    const clonePath = join(boot.ctx.collabWorkspaces.root, 'workspaces', `source-repo-${id}`)
+    await boot.ctx.collabWorkspaces.create('member', UserId(boot.member.userId), 'Product', {
+      id,
+      repoUrl: 'https://github.com/example/product.git',
+      clonePath,
+    })
+    const gate = createCollabWorkspaceAccess(boot.ctx)
+    expect(gate.allow(boot.member, clonePath)).toBe(true)
+    expect(gate.allow(boot.member, join(clonePath, 'src', 'index.ts'))).toBe(true)
+    const stranger = { userId: 'no-such-user', email: 'ghost@example.com', globalRole: 'member' as const }
+    expect(gate.allow(stranger, clonePath)).toBe(false)
+    // The same path before the record existed (or a name-only workspace whose
+    // directory name is the plain id) still parses from the layout.
+    expect(gate.allow(boot.member, join(boot.ctx.collabWorkspaces.root, 'workspaces', 'name-only'))).toBe(false)
+  })
 })

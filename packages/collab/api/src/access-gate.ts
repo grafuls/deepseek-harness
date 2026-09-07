@@ -61,17 +61,21 @@ export function createCollabWorkspaceAccess(ctx: Context): CollabWorkspaceAccess
    * @returns the workspace id text, or undefined when not collab-scoped.
    */
   const resolveId = (path: string): string | undefined => {
+    // A workspace record's clone directory owns the path under the workspace's
+    // true id even when the clone lives inside the workspaces layout (its
+    // directory name is `<repo>-<workspaceId>`, not the workspace id). Consult
+    // the records before the layout parser so a clone-backed path scopes to the
+    // real id instead of the directory name; a record-less layout path (a
+    // name-only workspace) only then parses its id from the directory name.
+    const holding = ctx.collabWorkspaces.workspaceHolding(path)
+    if (holding !== undefined) return String(holding)
     const prefix = `${boundary()}${sep}workspaces${sep}`
     if (path.startsWith(prefix)) {
       const rest = path.slice(prefix.length)
       const separator = rest.indexOf(sep)
       return separator === -1 ? rest : rest.slice(0, separator)
     }
-    // A repo-backed workspace clones into a directory that may live under a
-    // configured clone root outside the workspaces layout; the workspace
-    // record names it, so member-scoped paths resolve from the records.
-    const holding = ctx.collabWorkspaces.workspaceHolding(path)
-    return holding === undefined ? undefined : String(holding)
+    return undefined
   }
   return {
     get collabRoot() {

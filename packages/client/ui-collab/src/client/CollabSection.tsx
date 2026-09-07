@@ -614,6 +614,11 @@ export function CollabSection({
   const sessionsState = useSessions(current => current)
   const byId = sessionsState.byId
   const hostWorkspaces = useWorkspaces(current => current.items)
+  // Registry-global archive set: the host never removes an archived session
+  // from a workspace's `sessionIds` account, so every grouping surface must
+  // hide archived ids itself. The collab section is such a surface — archiving
+  // a shared session must drop its row here, exactly like the browsing region.
+  const archivedSessionIds = useWorkspaces(current => current.archivedSessionIds)
   // Collab workspace id -> its Host mount (the record the collab `open` created).
   const hostByCollabId = useMemo(() => {
     const byCollabId = new Map<string, WorkspaceView>()
@@ -828,13 +833,17 @@ export function CollabSection({
   // order first, so the observation baseline is refreshed exactly once and the
   // later render reads a stable cache (mirrors the browsing region's effect-
   // driven account, but in a single synchronous pass).
+  const archivedSet = new Set(archivedSessionIds)
   const ordersByWorkspace = new Map<string, readonly SessionId[]>()
   for (const workspace of state.workspaces) {
     const host = hostByCollabId.get(workspace.id)
     if (host === undefined) continue
     // `sessionIds` may lead the list pull, so drop ids the session store has
-    // not pulled yet; the rest are guaranteed present below.
-    const present = host.sessionIds.filter((id): id is SessionId => byId[id] !== undefined)
+    // not pulled yet; the rest are guaranteed present below. Archived ids are
+    // dropped here too — the host keeps them in `sessionIds` for unarchive,
+    // and this surface (like the browsing region's) hides them.
+    const present = host.sessionIds.filter((id): id is SessionId =>
+      byId[id] !== undefined && !archivedSet.has(id))
     const { order, observedUpdatedAt } = nextCollabSessionOrder(
       present, byId, observedUpdatedAtRef.current, state.orderBy,
     )

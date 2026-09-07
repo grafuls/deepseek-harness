@@ -57,9 +57,9 @@ function sessionState(items: readonly SessionSummary[], current?: SessionId): Se
   }
 }
 
-function hostState(items: readonly WorkspaceView[]): WorkspaceListState {
+function hostState(items: readonly WorkspaceView[], archivedSessionIds: readonly SessionId[] = []): WorkspaceListState {
   return {
-    items, archivedSessionIds: [], state: 'idle', phase: 'ready', error: null, baselinesReady: true,
+    items, archivedSessionIds, state: 'idle', phase: 'ready', error: null, baselinesReady: true,
     recentWorkspaceId: items[0]?.workspaceId,
   }
 }
@@ -124,14 +124,19 @@ function readyState(overrides: Partial<CollabWorkspacesState> = {}): CollabWorks
 function section(
   state: CollabWorkspacesState,
   overrides: Partial<CollabWorkspacesActions> = {},
-  host: { sessions?: readonly SessionSummary[]; workspaces?: readonly WorkspaceView[]; current?: SessionId } = {},
+  host: {
+    sessions?: readonly SessionSummary[]
+    workspaces?: readonly WorkspaceView[]
+    current?: SessionId
+    archivedSessionIds?: readonly SessionId[]
+  } = {},
 ) {
   const injected = actions()
   return render((
     <CollabSection
       useCollabWorkspaces={sel => sel(state)}
       useSessions={sel => sel(sessionState(host.sessions ?? [], host.current))}
-      useWorkspaces={sel => sel(hostState(host.workspaces ?? []))}
+      useWorkspaces={sel => sel(hostState(host.workspaces ?? [], host.archivedSessionIds ?? []))}
       actions={{ ...injected, ...overrides }}
       t={t}
       wide={true}
@@ -540,6 +545,34 @@ describe('CollabSection', () => {
     )
     expect(screen.queryByRole('treeitem', { name: 'New Session' })).toBeNull()
     expect(screen.getByRole('treeitem', { name: 's-kept' })).toBeTruthy()
+  })
+
+  it('hides an archived session from the workspace row (grouped mode)', () => {
+    section(
+      readyState(),
+      {},
+      {
+        sessions: [sessionSummary('s-keep', 1), sessionSummary('s-arch', 2)],
+        workspaces: [hostWorkspace('hw1', 'w1', ['s-keep', 's-arch'], 'Alpha')],
+        archivedSessionIds: [sid('s-arch')],
+      },
+    )
+    expect(screen.getByRole('treeitem', { name: 's-keep' })).toBeTruthy()
+    expect(screen.queryByRole('treeitem', { name: 's-arch' })).toBeNull()
+  })
+
+  it('hides an archived session in flat mode and keeps the survivor', () => {
+    section(
+      readyState({ groupBy: 'flat', orderBy: 'manual' }),
+      {},
+      {
+        sessions: [sessionSummary('s-keep', 1), sessionSummary('s-arch', 2)],
+        workspaces: [hostWorkspace('hw1', 'w1', ['s-keep', 's-arch'], 'Alpha')],
+        archivedSessionIds: [sid('s-arch')],
+      },
+    )
+    expect(screen.getByRole('treeitem', { name: 's-keep' })).toBeTruthy()
+    expect(screen.queryByRole('treeitem', { name: 's-arch' })).toBeNull()
   })
 
   it('keeps a current blank session shown in flat mode and hides a departed one', () => {

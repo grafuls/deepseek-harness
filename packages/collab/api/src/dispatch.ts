@@ -25,6 +25,7 @@ import { cloneDirectoryName, cloneRepository, gitCloneRunner } from './clone.ts'
 import type { GitCloneCredentials, GitCommandRunner } from './clone.ts'
 import { appendPushAudit } from './audit.ts'
 import { pushWorkspaceBranch, fetchWorkspaceSync, CollabPushRejectedError, CollabCredentialUnavailableError } from './push.ts'
+import { diffWorkspaceBranch, CollabPatchBaseError } from './patch.ts'
 import { GIT_STATE_TIMEOUT_MS, gitStateOf } from './repo-state.ts'
 import { readCloneDepth, readCloneDir } from './settings.ts'
 import type {
@@ -32,6 +33,7 @@ import type {
   CollabInvitationView,
   CollabMemberView,
   CollabMountedWorkspaceView,
+  CollabPatchView,
   CollabPrincipalView,
   CollabPushView,
   CollabStatusView,
@@ -410,6 +412,15 @@ interface MountedWorkspaceRegistryLike {
    * mutating it; a missing path rejects and an unowned directory is undefined.
    */
   resolveByPath(path: string): Promise<MountedWorkspaceLike | undefined>
+  /**
+   * Delete one workspace registration by id (idempotent; an unknown id is a
+   * no-op). Used to unregister a collab-origin mount when its collab
+   * workspace is deleted, so the leaked Host record stops appearing in
+   * `workspace.list` (the hero workspace picker / sidebar).
+   * @param id - the Host workspace id to remove.
+   * @returns `true` when a record was deleted, `false` when it was unknown.
+   */
+  delete(id: string): Promise<boolean>
 }
 
 /**
@@ -510,6 +521,12 @@ ENDPOINTS.set('collab/workspace.leave', async (ctx, principal, args) => {
 ENDPOINTS.set('collab/workspace.delete', async (ctx, principal, args) => {
   const { wsId, role, record } = requireWorkspaceAndRole(ctx, principal, requireString(args, 'workspaceId', 'collab/workspace.delete'))
   await ctx.collabWorkspaces.delete(role, wsId)
+  // A mounted collab workspace registers a Host workspace record
+  // (`collab/workspace.open`); that record survives the collab record deletion
+  // and would otherwise keep the deleted workspace visible in `workspace.list`
+  // (the hero picker / sidebar). Unregister it before the clone directory is
+  // removed — `resolveByPath` needs the working directory to exist.
+  await unregisterWorkspaceMount(ctx, record)
   // Deleting a repository-backed workspace also removes its clone directory
   // (the shared working tree), matching the destroy-the-workspace contract;
   // cleanup is best-effort and never fails the delete. A name-only workspace
@@ -524,6 +541,51 @@ ENDPOINTS.set('collab/workspace.delete', async (ctx, principal, args) => {
   }
   return collabOk({ deleted: true })
 })
+
+/**
+ * Remove the Host workspace registration a collab workspace opened over its
+ * working directory, so a deleted collab workspace stops appearing in
+ * `workspace.list`. Best-effort: a missing registry (headless lane), a
+ * mid-clone record (no mount yet), or a failed resolution/removal never fails
+ * the delete.
+ * @param ctx - the collab API plugin context.
+ * @param record - the workspace record being deleted.
+ */
+async function unregisterWorkspaceMount(ctx: Context, record: WorkspaceRecord): Promise<void> {
+  const registry = ctx.get('workspaceRegistry', false) as MountedWorkspaceRegistryLike | undefined
+  if (registry === undefined) return
+  let dir: string
+  try {
+    dir = workspaceWorkingDir(ctx, record)
+  } catch {
+    // A repository-bootstrapped workspace whose clone has not settled answers
+    // `collab-clone-pending` and has no mount to unregister; the clone job
+    // cleans up the provisioning record when it settles into the removed one.
+    return
+  }
+  let mount: MountedWorkspaceLike | undefined
+  try {
+    mount = await registry.resolveByPath(dir)
+  } catch (error: unknown) {
+    // The working directory does not exist (a name-only workspace never
+    // opened, or a clone dir already gone): there is no Host mount to
+    // unregister. A genuine resolution failure is logged.
+    if (isMissingPath(error)) return
+    ctx.logger.warn(`collab mount unregister for '${record.id}' failed: ${String(error)}`)
+    return
+  }
+  if (mount === undefined) return
+  try {
+    await registry.delete(mount.id)
+  } catch (error: unknown) {
+    ctx.logger.warn(`collab mount unregister for '${record.id}' failed: ${String(error)}`)
+  }
+}
+
+/** Whether a filesystem error means the canonicalized path does not exist. */
+function isMissingPath(error: unknown): boolean {
+  return error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT'
+}
 
 ENDPOINTS.set('collab/workspace.rename', async (ctx, principal, args) => {
   const name = requireString(args, 'name', 'collab/workspace.rename').trim()
@@ -629,6 +691,32 @@ ENDPOINTS.set('collab/workspace.fetch', async (ctx, principal, args) => {
     // A fetch is read-only on the shared tree; a git failure is surfaced as a
     // bad-request rather than an opaque push-style code.
     throw new CollabWireError('collab-bad-request', `collab: fetching '${wsId}' failed: ${String(error)}`)
+  }
+})
+
+ENDPOINTS.set('collab/workspace.patch', async (ctx, principal, args) => {
+  const { wsId, record } = requireWorkspaceAndRole(ctx, principal, requireString(args, 'workspaceId', 'collab/workspace.patch'))
+  // A name-only or still-cloning workspace has no settled repository to diff.
+  if (cloneStateOf(record) !== 'ready' || record.clonePath === undefined) {
+    throw new CollabWireError('collab-not-a-repository', `collab: workspace '${wsId}' has no settled repository clone to diff`)
+  }
+  // An explicit branch is validated up front (its bad-request refusal is not a
+  // git failure); a missing branch defaults to the checkout's current branch,
+  // mirroring the push endpoint. The diff runs against the branch's mainline
+  // base and reads only commit objects, so it needs no confirmation and no
+  // credential (a local, read-only patch).
+  const explicitBranch = args.branch === undefined ? undefined : requirePushBranch(args, 'collab/workspace.patch')
+  const runner = repoRunnerOf(ctx)
+  try {
+    const branch = explicitBranch ?? (await pushableBranch(ctx, record.clonePath))
+    const patch = await diffWorkspaceBranch(record.clonePath, branch, runner ?? gitCloneRunner)
+    return collabOk<CollabPatchView>(patch)
+  } catch (error: unknown) {
+    if (error instanceof CollabWireError) throw error
+    if (error instanceof CollabPatchBaseError) {
+      throw new CollabWireError('collab-bad-request', `collab: workspace '${wsId}' has no mainline branch to diff`)
+    }
+    throw new CollabWireError('collab-bad-request', `collab: diffing '${explicitBranch ?? 'the workspace branch'}' failed: ${String(error)}`)
   }
 })
 

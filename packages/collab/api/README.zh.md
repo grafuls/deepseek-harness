@@ -40,6 +40,7 @@ Collab API 网关：一个函数插件，把共享的 harness 进程转变为 Go
 | `collab/workspace.setMemberRole` | 修改成员角色；仅 workspace 管理员 |
 | `collab/workspace.removeMember` | 移除成员；仅 workspace 管理员 |
 | `collab/workspace.open` | 把 collab 工作区挂载为保留数据目录之上的真实主机工作区（成员即可打开）；主机注册表为每个成员解析到同一个工作区，且 Host 平面只为成员提供它及其会话 |
+| `collab/workspace.patch` | 一个分支相对工作区主干基线的统一 diff，作为可本地 `git apply` 的补丁，并给出建议文件名；只读且仅成员可用 |
 | `collab/users.list` | 账号名册；仅实例管理员 |
 | `collab/users.setGlobalRole` | 提升/降级账号（`admin`/`member`）；仅实例管理员 |
 | `collab/users.setDisabled` | 禁用/启用账号；仅实例管理员 |
@@ -52,11 +53,11 @@ Collab API 网关：一个函数插件，把共享的 harness 进程转变为 Go
 
 ## 仓库的推送、同步与审计
 
-`collab/workspace.push` 把一个分支推到克隆的 origin，「协作工作区」面板的仓库行提供该操作（通过服务器试运行预览，再由成员亲自确认），机制见上文。`collab/workspace.fetch` 在不触碰检出的情况下把已落定的克隆与 origin 同步：它抓取远端跟踪引用并清理过时的引用，绝不触碰工作树或会话的当前分支，因此成员可以把最新的上游拉进共享克隆而不打扰任何会话的那条线。它拒绝仅命名或仍在克隆的记录（`collab-not-a-repository`），并把 git 失败折叠成 `collab-bad-request`。推送与抓取共用钉定的服务器凭据——经临时 `GIT_CONFIG_GLOBAL` 的授权头把令牌只发给匹配的 origin 主机；令牌绝不进入浏览器、线上 URL 或仓库自身的配置。
+`collab/workspace.push` 把一个分支推到克隆的 origin，「协作工作区」面板的仓库行提供该操作（通过服务器试运行预览，再由成员亲自确认），机制见上文。`collab/workspace.fetch` 在不触碰检出的情况下把已落定的克隆与 origin 同步：它抓取远端跟踪引用并清理过时的引用，绝不触碰工作树或会话的当前分支，因此成员可以把最新的上游拉进共享克隆而不打扰任何会话的那条线。它拒绝仅命名或仍在克隆的记录（`collab-not-a-repository`），并把 git 失败折叠成 `collab-bad-request`。`collab/workspace.patch` 生成一个分支相对工作区主干基线（`refs/remotes/origin/HEAD` 默认分支）的统一 diff，作为成员可保存并本地 `git apply` 的补丁。它以分支的主干 merge-base 为根：对于并非克隆当前检出的分支，它只读取提交对象，因此确定且绝不把其他会话未提交的工作树改动混入；而当分支就是检出时，也会带上该会话未提交的改动（把工作树与 merge-base 相 diff）。它无需确认（本地只读 diff）也无需凭据。未显式给出 `branch` 时默认使用检出的当前分支，拒绝仅命名或仍在克隆的记录（`collab-not-a-repository`），并把分离检出、未知主干或 git 失败折叠成 `collab-bad-request`。推送与抓取共用钉定的服务器凭据——经临时 `GIT_CONFIG_GLOBAL` 的授权头把令牌只发给匹配的 origin 主机；令牌绝不进入浏览器、线上 URL 或仓库自身的配置（补丁完全在本地计算，从不依赖它）。
 
 每次推送（试运行或真实推送）都会向 `<collabWorkspacesRoot>/audit/push.jsonl` 追加一行：工作区与操作者 id、操作者显示名、分支、是否试运行、是已推送还是已是最新，以及成功推送时的新远端 SHA 与对比链接。审计写入是尽力而为的（失败只记 warn，绝不拖垮推送），且审计线索比工作区删除活得更久，因此即使记录与其克隆都已不在，管理员仍能看出谁在何时推了什么。
 
-`collab/workspace.delete` 现在也会删除仓库后端工作区所依托的克隆目录（递归且强制），因此删除工作区会关掉它的工作树，而不是把根留在磁盘上；删不动的克隆仍会完成记录删除，只记 warn。
+`collab/workspace.delete` 现在也会删除仓库后端工作区所依托的克隆目录（递归且强制），因此删除工作区会关掉它的工作树，而不是把根留在磁盘上；删不动的克隆仍会完成记录删除，只记 warn。已挂载的 collab 工作区在宿主侧的注册也会被注销，因此被删除的工作区不会继续出现在 `workspace.list`（主界面工作区选择器与侧边栏），而是在 collab「工作区」区块背后残留记录。
 
 ## Host 平面按成员资格划定作用域
 
@@ -118,4 +119,4 @@ The package contributes nothing to model requests, so it cannot invalidate cache
 - **两条实时回显携带隐藏会话 id 但不携带会话内容** —— `host()` 的归档会话回显与 `mux()` 的任务/队列/问题基线是进程全局的，因此仍会携带调用者看不见的 collab 会话的工作区 id、会话 id 或任务状态；它们不携带任何会话内容，而枚举表面（`workspace.list`、`sessions.list`/`search`、`history`、`fork`）已被完全划定作用域。
 - **成员资格在请求时与流打开时取样** —— `host()`/`mux()` 流在打开时捕获的主体在该流生命周期内保持不变，因此成员资格的授予或撤销作用于新的请求与新的流，而不是已经推送的帧。
 - **`loader.await()` 不代表 collab 表面已就绪** —— 依赖方的激活在树报告加载完成之后还有一个 tick 才落定，因此就绪消费者应先探测 `/api/collab/auth/session` 再发起请求（真实组合测试正是这么做的）。
-- **删除会移除记录与已落定克隆** —— `collab/workspace.delete` 注销一个工作区，并删除仓库后端工作区所依托的克隆目录（尽力而为；删不动的克隆仍会以 warn 完成删除）。collab 根目录下的推送审计线索予以保留。仅命名工作区已物化的数据目录留给宿主进程管理；从同一 URL 重建工作区会克隆进一个全新的 id 命名目录。
+- **删除会移除记录与已落定克隆** —— `collab/workspace.delete` 注销一个工作区，并删除仓库后端工作区所依托的克隆目录（尽力而为；删不动的克隆仍会以 warn 完成删除）。collab 根目录下的推送审计线索予以保留。仅命名工作区已物化的数据目录留给宿主进程管理；从同一 URL 重建工作区会克隆进一个全新的 id 命名目录。已挂载的 collab 工作区在宿主侧的注册也会一并删除，因此该工作区不再出现在 `workspace.list`。

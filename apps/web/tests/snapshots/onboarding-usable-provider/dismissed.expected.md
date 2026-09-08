@@ -24,6 +24,7 @@
       - text: DeepSeek
       - img "API 密钥缺失"
       - button "编辑 DeepSeek (deepseek-official)": 编辑
+      - button "删除 DeepSeek (deepseek-official)": 删除
   - text: 提供方
   - combobox "提供方":
     - option "amazon-bedrock"

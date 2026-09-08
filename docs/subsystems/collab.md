@@ -341,6 +341,18 @@ async setMemberRole( actorWorkspaceRole: WorkspaceRole, workspaceId: WorkspaceId
 async removeMember( actorWorkspaceRole: WorkspaceRole, workspaceId: WorkspaceId, userId: UserId, ): Promise<WorkspaceRecord>
 
 /**
+ * Rename a workspace (admin). The new name is persisted and published, so
+ * the re-labeled name reaches every member through the workspace list. An
+ * unchanged name is a no-op that keeps the record's `updatedAt` stable.
+ * @param actorWorkspaceRole - the acting workspace role (needs `workspace.rename`).
+ * @param actorId - the acting user.
+ * @param workspaceId - the workspace.
+ * @param name - the new display name (trimmed; must not be empty).
+ * @returns the updated workspace record.
+ */
+async renameWorkspace(actorWorkspaceRole: WorkspaceRole, actorId: UserId, workspaceId: WorkspaceId, name: string): Promise<WorkspaceRecord>
+
+/**
  * Delete a workspace and every invitation into it.
  * @param actorWorkspaceRole - the acting workspace role (needs `workspace.delete`).
  * @param workspaceId - the workspace.

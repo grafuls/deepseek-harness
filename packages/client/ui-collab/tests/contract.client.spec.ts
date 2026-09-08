@@ -142,6 +142,18 @@ describe('CollabApi', () => {
     expect(seen.map(entry => entry.channel)).toEqual(['/api'])
   })
 
+  it('downloads a branch patch, omitting an absent branch from the request', async () => {
+    const patch = { branch: 'topic', base: 'main', patch: 'diff --git a/x b/x\n+d', filename: 'topic.patch' }
+    const { call, seen } = fakeCall([
+      { endpoint: 'collab/workspace.patch', payload: { workspaceId: 'w1', branch: 'topic' }, result: ok(patch) },
+      { endpoint: 'collab/workspace.patch', payload: { workspaceId: 'w1' }, result: ok(patch) },
+    ])
+    const api = new CollabApi(call)
+    await expect(api.downloadPatch('w1', 'topic')).resolves.toEqual(patch)
+    await expect(api.downloadPatch('w1')).resolves.toEqual(patch)
+    expect(seen.map(entry => entry.channel)).toEqual(['/api', '/api'])
+  })
+
   it('folds a refused push into a CollabError carrying its wire code', async () => {
     const failing = vi.fn<CollabRpcChannel['call']>(async () => refusal('collab-approval-required'))
     const api = new CollabApi(failing)

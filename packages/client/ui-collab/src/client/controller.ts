@@ -8,7 +8,7 @@
 
 import type { TranslateNS } from '@deepseek-ai/dsh-client-locale/client'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
-import { CollabError, type CollabApi, type CollabPushView, type CollabRole } from './contract.ts'
+import { CollabError, type CollabApi, type CollabPatchView, type CollabPushView, type CollabRole } from './contract.ts'
 import type { CollabGroupBy, CollabOrderBy, CollabWorkspacesState } from './store.ts'
 
 /** The runtime Workspace face the opener switches into a mounted collab workspace. */
@@ -590,6 +590,27 @@ export class CollabWorkspacesController {
       const synced = await this.api.fetchSync(workspaceId)
       this.store.set({ ...this.store.getSnapshot(), working: false })
       return synced
+    } catch (error) {
+      this.store.set({ ...this.store.getSnapshot(), working: false, error: this.foldWireError(error) })
+      return undefined
+    }
+  }
+
+  /**
+   * Get a branch's unified diff against the workspace mainline as a patch (the
+   * controller never touches the DOM; callers own triggering the browser
+   * download). A folded failure surfaces on the store banner and returns
+   * undefined.
+   * @param workspaceId - the workspace whose clone to diff.
+   * @param branch - branch to diff; omitted uses the checkout's current branch.
+   * @returns the patch view, or undefined on a folded failure (banner).
+   */
+  async downloadPatch(workspaceId: string, branch?: string): Promise<CollabPatchView | undefined> {
+    this.store.set({ ...this.store.getSnapshot(), working: true, error: undefined })
+    try {
+      const patch = await this.api.downloadPatch(workspaceId, branch)
+      this.store.set({ ...this.store.getSnapshot(), working: false })
+      return patch
     } catch (error) {
       this.store.set({ ...this.store.getSnapshot(), working: false, error: this.foldWireError(error) })
       return undefined

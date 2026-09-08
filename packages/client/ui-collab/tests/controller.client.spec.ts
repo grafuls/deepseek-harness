@@ -741,6 +741,24 @@ describe('CollabWorkspacesController sync', () => {
   })
 })
 
+describe('CollabWorkspacesController downloadPatch', () => {
+  it('resolves the patch through the patch endpoint and never touches the DOM', async () => {
+    const patch = { branch: 'topic', base: 'main', patch: 'diff --git a/x b/x\n+d', filename: 'topic.patch' }
+    const { store, controller, seen, seenPayloads } = harness({
+      'collab/workspace.patch': [ok(patch), refusal('collab-bad-request')],
+    })
+    store.set({ ...store.getSnapshot(), workspaces: [WORKSPACE] })
+    await expect(controller.downloadPatch('w1', 'topic')).resolves.toEqual(patch)
+    expect(seen).toEqual(['collab/workspace.patch'])
+    expect(seenPayloads).toContainEqual({ workspaceId: 'w1', branch: 'topic' })
+    expect(store.getSnapshot().error).toBeUndefined()
+    await expect(controller.downloadPatch('w1')).resolves.toBeUndefined()
+    expect(seenPayloads).toContainEqual({ workspaceId: 'w1' })
+    expect(store.getSnapshot().error).toBe('请求无效，请检查输入')
+    expect(store.getSnapshot().working).toBe(false)
+  })
+})
+
 describe('CollabWorkspacesController reorderSession', () => {
   it('moves a session through the runtime port with its anchor', async () => {
     const { controller, reorderSession } = harness()

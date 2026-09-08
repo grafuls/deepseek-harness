@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-01-collab-lifecycle-hygiene.md
-2026-09-01-collab-lifecycle-hygiene.md: 17c51587e58fef5e555edc81db8254e9f985d529
-2026-09-01-collab-lifecycle-hygiene.zh.md: 94120f4a1c77173cea962a388d79cb65e88b619e
+2026-09-01-collab-lifecycle-hygiene.md: dd6e053a296b5827b109916962a3e29ba73c63fd
+2026-09-01-collab-lifecycle-hygiene.zh.md: 71ae573c984c7238363e56ce8eb76a8232171285

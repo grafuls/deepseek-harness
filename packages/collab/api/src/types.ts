@@ -91,6 +91,21 @@ export interface CollabPushView {
   prUrl?: string
 }
 
+/**
+ * The server-side outcome of a `collab/workspace.patch`: the unified diff of
+ * one branch against the workspace's mainline base, ready to apply locally.
+ */
+export interface CollabPatchView {
+  /** The branch whose diff was produced. */
+  branch: string
+  /** The mainline base branch the diff roots at; empty when unknown. */
+  base: string
+  /** The unified diff text, `git apply`-compatible. */
+  patch: string
+  /** Suggested download filename (`<branch>.patch`). */
+  filename: string
+}
+
 /** Client-safe membership row, enriched from the user registry when present. */
 export interface CollabMemberView {
   userId: string

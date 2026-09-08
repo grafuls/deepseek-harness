@@ -127,6 +127,7 @@ export function apply(ctx: ClientContext): void {
       previewPush: (workspaceId, branch) => controller.previewPush(workspaceId, branch),
       pushBranch: (workspaceId, branch) => controller.pushBranch(workspaceId, branch),
       syncWorkspace: workspaceId => controller.syncWorkspace(workspaceId),
+      downloadPatch: (workspaceId, branch) => controller.downloadPatch(workspaceId, branch),
     },
   })
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-collab: workspaces manager dictionaries')

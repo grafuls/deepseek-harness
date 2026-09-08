@@ -20,7 +20,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import clsx from 'clsx'
 import {
   Button, HoverCard, IconArchiveOutline20, IconBranchOutline16, IconCloseFill14,
-  IconEditOutline16, IconEllipsisOutline16, IconFolderClose16, IconFolderOpen16,
+  IconDownloadOutline16, IconEditOutline16, IconEllipsisOutline16, IconFolderClose16, IconFolderOpen16,
   IconPersonalizationOutline16, IconPlusOutline16, IconProjectAddOutline16,
   IconRefreshOutline16, IconRightUpOutline16, IconSearchOutline16, IconTrashOutline16,
   IconTriangleRightFill14, Menu, Modal, StateDot, Tooltip,
@@ -37,7 +37,8 @@ import {
 } from './collab-rows.ts'
 import { nextCollabSessionOrder } from './collab-order.ts'
 import { CreateWorkspace } from './CreateWorkspace.tsx'
-import type { CollabPushView, CollabWorkspaceView } from './contract.ts'
+import type { CollabPatchView, CollabPushView, CollabWorkspaceView } from './contract.ts'
+import { downloadPatchFile } from './patch-download.ts'
 import { pushOutcomeCopy, pushPreviewCopy } from './push-copy.ts'
 import { sessionBranchName } from './session-branch.ts'
 import type { NS } from './locales.ts'
@@ -318,7 +319,9 @@ function CollabWorkspaceHoverContent({ label, path, count, createdAt, t }: {
  * highlight, and a hover card. Drag wiring (same-workspace markers only) is
  * what lets members reorder the shared order.
  */
-function CollabSessionRow({ summary, current, now, onOpen, drag, flat = false, branch, onPush, onSync, onRename, onFork, onArchive, t }: {
+function CollabSessionRow({
+  summary, current, now, onOpen, drag, flat = false, branch, onPush, onSync, onPatch, onRename, onFork, onArchive, t,
+}: {
   summary: SessionSummary
   current: SessionId | undefined
   now: number
@@ -326,12 +329,14 @@ function CollabSessionRow({ summary, current, now, onOpen, drag, flat = false, b
   /** The row's drag wiring (every collab session row is draggable). */
   drag: CollabRowDragProps
   flat?: boolean
-  /** The session's work-branch name under a repo-backed workspace; enables the branch hover line and the push/sync verbs. */
+  /** The session's work-branch name under a repo-backed workspace; enables the branch hover line and the push/sync/patch verbs. */
   branch: string | undefined
   /** Open the confirm-gated push dialog for the session's branch. */
   onPush: ((sessionId: SessionId) => void) | undefined
   /** Fetch the origin into the shared clone for the session's line. */
   onSync: ((sessionId: SessionId) => void) | undefined
+  /** Download the session's branch diff as a patch file. */
+  onPatch: ((sessionId: SessionId) => void) | undefined
   /** Open the browser-owned rename dialog seeded with the current title. */
   onRename: (sessionId: SessionId, currentTitle: string) => void
   /** Fork the shared session into a child and open it. */
@@ -360,6 +365,7 @@ function CollabSessionRow({ summary, current, now, onOpen, drag, flat = false, b
     { id: 'archive', label: t('archiveSession'), icon: <IconArchiveOutline20 size={16} /> },
     ...(branch !== undefined
       ? [
+        { id: 'patch', label: t('downloadPatch'), icon: <IconDownloadOutline16 /> },
         { id: 'push', label: t('pushBranch'), icon: <IconRightUpOutline16 /> },
         { id: 'sync', label: t('syncBranch'), icon: <IconRefreshOutline16 /> },
       ]
@@ -418,6 +424,7 @@ function CollabSessionRow({ summary, current, now, onOpen, drag, flat = false, b
               if (id === 'rename') onRename(summary.id, summary.displayTitle)
               if (id === 'fork') onFork(summary.id)
               if (id === 'archive') onArchive(summary.id)
+              if (id === 'patch' && onPatch !== undefined) onPatch(summary.id)
               if (id === 'push' && onPush !== undefined) onPush(summary.id)
               if (id === 'sync' && onSync !== undefined) onSync(summary.id)
             }}
@@ -788,6 +795,19 @@ export function CollabSection({
     })
   }
 
+  // Session patch download: fetch the branch's diff, then hand it to the
+  // browser so it saves the file. A folded failure leaves a transient notice
+  // (the controller never touches the DOM).
+  const [patchNote, setPatchNote] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
+  const runSessionPatch = (workspaceId: string, branch: string): void => {
+    setPatchNote(null)
+    void actions.downloadPatch(workspaceId, branch).then((patch: CollabPatchView | undefined) => {
+      if (patch === undefined) { setPatchNote({ kind: 'error', text: t('downloadPatchFailed') }); return }
+      downloadPatchFile(patch)
+      setPatchNote({ kind: 'ok', text: t('downloadPatchOk') })
+    })
+  }
+
   // Session drag: the per-workspace insert-marker state (source identity plus
   // the current hover target), mirroring the browsing region's row drag.
   // Rows only ever receive markers within their own workspace, because collab
@@ -1044,6 +1064,14 @@ export function CollabSection({
               {syncNote.text}
             </div>
           )}
+          {patchNote !== null && (
+            <div
+              className={clsx(css.sessionNotice, patchNote.kind === 'error' && css.sessionNoticeError)}
+              role={patchNote.kind === 'error' ? 'alert' : undefined}
+            >
+              {patchNote.text}
+            </div>
+          )}
 
           <div className={css.listArea}>
             {state.workspaces.length === 0 && state.invitationsForMe.length === 0 && (
@@ -1075,6 +1103,7 @@ export function CollabSection({
                         branch={branch}
                         onPush={branch === undefined ? undefined : () => { openSessionPush(entry.workspaceId, branch) }}
                         onSync={branch === undefined ? undefined : () => { runSessionSync(entry.workspaceId) }}
+                        onPatch={branch === undefined ? undefined : () => { runSessionPatch(entry.workspaceId, branch) }}
                         onRename={onSessionRename}
                         onFork={(id) => { actions.forkSession(id) }}
                         onArchive={onSessionArchive}
@@ -1141,6 +1170,7 @@ export function CollabSection({
                               branch={branch}
                               onPush={branch === undefined ? undefined : () => { openSessionPush(workspace.id, branch) }}
                               onSync={branch === undefined ? undefined : () => { runSessionSync(workspace.id) }}
+                              onPatch={branch === undefined ? undefined : () => { runSessionPatch(workspace.id, branch) }}
                               onRename={onSessionRename}
                               onFork={(id) => { actions.forkSession(id) }}
                               onArchive={onSessionArchive}

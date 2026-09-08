@@ -28,6 +28,14 @@ export interface ProviderRow {
   configured: boolean
   /** Whether the user layer alone carries the profile (removal restores the base). */
   removable: boolean
+  /**
+   * Whether this whole-section provider supports being disabled: its section
+   * declares a `disabled` field, so removal disables it instead of unsetting a
+   * path. Absent from providers that have no such control.
+   */
+  disablable: boolean
+  /** Whether the provider is currently disabled (hidden from the rows). */
+  disabled: boolean
   /** The credential reference the resolved profile names, when one does. */
   apiKeyEnv: string | undefined
   /** Credential state for {@link apiKeyEnv}, once described. */
@@ -89,6 +97,32 @@ export function protocolChoices(
   const list = (node as { type?: string; list?: readonly { value?: unknown }[] } | undefined)
   if (list?.type !== 'union' || list.list === undefined) return []
   return list.list.map(entry => entry.value).filter((value): value is string => typeof value === 'string')
+}
+
+/**
+ * Whether a whole-section provider's section declares a disable control. A
+ * section that names a `disabled` field supports removal-by-disable, while a
+ * section without one (or a profile addressed at a sub-path) is removed by
+ * unsetting its path.
+ * @param namespace - the provider's namespace view, or undefined when it did not resolve.
+ * @param schema - settings schema operations.
+ * @returns the section's `disabled` flag value, or undefined when the section
+ * does not declare one.
+ */
+function sectionDisabledOf(
+  namespace: SettingsNamespaceView | undefined,
+  settingsPath: readonly string[],
+  schema: SettingsSchemaOperations,
+): boolean | undefined {
+  // Only a whole-section provider's own section is the namespace root; for a
+  // path-addressed provider the root is the whole namespace, where a `disabled`
+  // key (if any) is not this provider's flag.
+  if (namespace === undefined || settingsPath.length > 0) return undefined
+  const section = schema.getPath(namespace.value, [])
+  /* v8 ignore next -- a whole-section provider's resolved value is always a settings object, never null or a scalar */
+  if (typeof section !== 'object' || section === null) return undefined
+  const disabled = (section as { disabled?: unknown }).disabled
+  return typeof disabled === 'boolean' ? disabled : undefined
 }
 
 /** The credential reference a resolved profile names (its `apiKeyEnv` field). */
@@ -164,14 +198,26 @@ export class ModelsSettingsStore {
       const namespace = namespaces.get(entry.settingsNs)
       const configured = namespace !== undefined
         && (entry.settingsPath.length === 0 || this.schema.getPath(namespace.value, entry.settingsPath) !== undefined)
+      // A whole-section provider whose section declares a `disabled` field is
+      // disablable: removal sets that flag and withdrawals the provider, rather
+      // than unsetting a profile path. Such a provider is removable whenever it
+      // is enabled — its row carries the same Delete action as any other — and
+      // hidden once disabled.
+      const disabledFlag = sectionDisabledOf(namespace, entry.settingsPath, this.schema)
+      const disablable = disabledFlag !== undefined
+      const disabled = disabledFlag === true
       const removable = namespace !== undefined
-        && entry.settingsPath.length > 0
-        && this.schema.hasPath(namespace.user, entry.settingsPath)
-        && !this.schema.hasPath(namespace.base, entry.settingsPath)
+        && (disablable
+          ? !disabled
+          : entry.settingsPath.length > 0
+            && this.schema.hasPath(namespace.user, entry.settingsPath)
+            && !this.schema.hasPath(namespace.base, entry.settingsPath))
       return {
         entry,
         configured,
         removable,
+        disablable,
+        disabled,
         apiKeyEnv: apiKeyEnvOf(namespace, entry.settingsPath, this.schema),
         credential: undefined,
       }

@@ -36,7 +36,9 @@ export interface WorkspaceView {
   /**
    * Collab-origin marker: present exactly when this workspace is a Host mount
    * of a collaborative workspace, carrying that collab workspace's id.
-   * Browsing surfaces keep these mounts out of the local Workspaces list.
+   * Browsing surfaces keep these mounts out of the local Workspaces list, and
+   * deleting the collab workspace unregisters the mount so the row disappears
+   * from `workspace.list`.
    */
   collab?: { workspaceId: string }
 }

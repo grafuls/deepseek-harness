@@ -102,6 +102,22 @@ export interface CollabPushView {
   prUrl?: string
 }
 
+/**
+ * The outcome of a {@link CollabApi.downloadPatch}: the unified diff of one
+ * branch against the workspace's mainline base, ready to apply locally with
+ * `git apply`. The client builds a download from this text in the browser.
+ */
+export interface CollabPatchView {
+  /** The branch whose diff was produced. */
+  branch: string
+  /** The mainline base branch the diff roots at; empty when unknown. */
+  base: string
+  /** The unified diff text, `git apply`-compatible. */
+  patch: string
+  /** Suggested download filename (`<branch>.patch`). */
+  filename: string
+}
+
 
 /** One workspace member. */
 export interface CollabMemberView {
@@ -411,6 +427,26 @@ export class CollabApi {
    */
   fetchSync(workspaceId: string): Promise<{ fetched: boolean }> {
     return this.request('collab/workspace.fetch', { workspaceId })
+  }
+
+  /**
+   * Get the unified diff of one branch against the workspace's mainline base
+   * as a patch text a member can save and apply locally with `git apply`. The
+   * server roots the diff at the branch's mainline merge-base: for a branch
+   * that is not the clone's current checkout it is a committed-only three-dot
+   * diff, and when the branch is the checkout it also includes that session's
+   * uncommitted working-tree edits. It needs no confirmation (a read-only,
+   * local diff). Server-side failures (no settled clone, git errors) fold to
+   * the request error.
+   * @param workspaceId - the workspace whose clone to diff.
+   * @param branch - branch to diff; omitted uses the checkout's current branch.
+   * @returns the branch's patch text and suggested filename.
+   */
+  downloadPatch(workspaceId: string, branch?: string): Promise<CollabPatchView> {
+    return this.request('collab/workspace.patch', {
+      workspaceId,
+      ...(branch === undefined ? {} : { branch }),
+    })
   }
 
   /**

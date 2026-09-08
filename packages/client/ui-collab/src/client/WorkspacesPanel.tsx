@@ -8,7 +8,7 @@ import { useState, type ReactNode } from 'react'
 import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import type { InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
-import type { CollabPushView, CollabRole } from './contract.ts'
+import type { CollabPatchView, CollabPushView, CollabRole } from './contract.ts'
 import { CreateWorkspace } from './CreateWorkspace.tsx'
 import type { NS } from './locales.ts'
 import type { CollabGroupBy, CollabOrderBy, CollabWorkspacesState } from './store.ts'
@@ -77,6 +77,12 @@ export interface CollabWorkspacesActions {
    * checkout; resolves whether the fetch completed, or undefined on a failure.
    */
   syncWorkspace: (workspaceId: string) => Promise<{ fetched: boolean } | undefined>
+  /**
+   * Get one branch's unified diff against the workspace mainline as a patch;
+   * resolves the patch view for the browser to download, or undefined on a
+   * failure.
+   */
+  downloadPatch: (workspaceId: string, branch?: string) => Promise<CollabPatchView | undefined>
 }
 
 /** Registration-side injected facts: the shared store plus collab actions. */

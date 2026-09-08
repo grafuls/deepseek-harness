@@ -24,8 +24,8 @@ const NAMESPACES = [
   {
     ns: 'llm-deepseek',
     schema: {},
-    value: { apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://base' },
-    base: { baseURL: 'https://base' },
+    value: { disabled: false, apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://base' },
+    base: { disabled: false, baseURL: 'https://base' },
     applies: 'live' as const,
     secrets: [],
     revision: 0,
@@ -85,7 +85,9 @@ describe('ModelsSettingsStore', () => {
     const byProvider = new Map(state.rows.map(row => [row.entry.provider, row]))
     expect(byProvider.get('deepseek-official')).toMatchObject({
       configured: true,
-      removable: false,
+      removable: true,
+      disablable: true,
+      disabled: false,
       apiKeyEnv: 'DEEPSEEK_API_KEY',
       credential: { configured: false, writable: true },
     })
@@ -99,6 +101,28 @@ describe('ModelsSettingsStore', () => {
     expect(byProvider.get('anthropic')?.apiKeyEnv).toBeUndefined()
     expect(byProvider.get('ghost')).toMatchObject({ configured: false, removable: false })
     expect(state.namespaces.get('llm-pi-ai')?.ns).toBe('llm-pi-ai')
+  })
+
+  it('marks a disabled whole-section provider hidden and non-removable', async () => {
+    const { face, mirror } = api({
+      describeSettings: () => Promise.resolve(ok({
+        writable: true,
+        hasDocument: false,
+        namespaces: [{
+          ns: 'llm-deepseek',
+          schema: {},
+          value: { disabled: true, apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://base' },
+          base: { disabled: false, baseURL: 'https://base' },
+          applies: 'live' as const,
+          secrets: [],
+          revision: 0,
+        }] as never,
+      })),
+    })
+    const store = new ModelsSettingsStore(face, settingsSchema, mirror)
+    await store.load()
+    const deepseek = store.store.getSnapshot().rows.find(row => row.entry.provider === 'deepseek-official')
+    expect(deepseek).toMatchObject({ configured: true, disablable: true, disabled: true, removable: false })
   })
 
   it('degrades the credential badge, not the page, when the credential domain fails', async () => {

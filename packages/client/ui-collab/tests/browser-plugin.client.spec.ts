@@ -289,9 +289,11 @@ describe('ui-collab client plugin', () => {
     void face.actions.previewPush('w1', 'topic')
     void face.actions.pushBranch('w1', 'topic')
     void face.actions.syncWorkspace('w1')
+    void face.actions.downloadPatch('w1', 'topic')
     await vi.waitFor(() => { expect(store.getSnapshot().working).toBe(false) })
     expect(seen).toContain('collab/workspace.push')
     expect(seen).toContain('collab/workspace.fetch')
+    expect(seen).toContain('collab/workspace.patch')
     await fiber.dispose()
   })
 

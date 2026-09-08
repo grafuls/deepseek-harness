@@ -65,6 +65,12 @@ interface EditorTarget extends ProviderIdentity {
   credentialRef?: string
   /** The adapter reports this route as one it does not ship (see {@link ProviderEditorProps.declared}). */
   declared?: boolean
+  /**
+   * For a disablable whole-section provider: the section root value the
+   * delete writes, which disables the provider. Absent for a path-addressed
+   * provider, whose delete unsets its profile instead.
+   */
+  disableValue?: Record<string, unknown>
 }
 
 /** Values that vary around the shared provider-editor rendering. */
@@ -102,16 +108,27 @@ function renderProviderEditor({ target, ...props }: ProviderEditorRenderProps): 
 export async function removeProviderProfile(
   api: Pick<IApiClient, 'settings' | 'credentials'>,
   controller: ModelsSettingsStore,
-  target: { settingsNs: string; settingsPath: readonly string[]; credentialRef?: string },
+  target: {
+    settingsNs: string
+    settingsPath: readonly string[]
+    credentialRef?: string
+    disableValue?: Record<string, unknown>
+  },
 ): Promise<string | undefined> {
   try {
     if (target.credentialRef !== undefined) {
       const credential = await api.credentials.unset({ ref: target.credentialRef })
       if (!credential.result.ok) return credential.result.error.message
     }
+    // A path-addressed provider is removed by unsetting its profile; a
+    // disablable whole-section provider is removed by writing its disabled
+    // flag (the section root), which clears the rest of the user config and
+    // withdraws the provider from serving.
     const response = await api.settings.mutate({
       ns: target.settingsNs,
-      ops: [{ op: 'unset', path: [...target.settingsPath] }],
+      ops: target.disableValue === undefined
+        ? [{ op: 'unset', path: [...target.settingsPath] }]
+        : [{ op: 'set', path: [...target.settingsPath], value: target.disableValue }],
     })
     if (!response.result.ok) return response.result.error.message
   } catch (error) {
@@ -139,7 +156,11 @@ export function needsSetup(row: ProviderRow, anyUsable: boolean): boolean {
 }
 
 function targetOf(row: ProviderRow): EditorTarget {
-  const managedRef = deriveKeyRef(row.entry.provider)
+  // The page-managed reference is the one the editor stores a key under:
+  // the profile's named `apiKeyEnv`, or the provider-derived reference when
+  // the profile names none. A profile that names its own ref (DeepSeek's
+  // schema default `DEEPSEEK_API_KEY`) is therefore still page-managed.
+  const managedRef = row.apiKeyEnv ?? deriveKeyRef(row.entry.provider)
   const credentialRef = row.apiKeyEnv === managedRef
     && row.credential?.configured === true
     && row.credential.writable
@@ -155,6 +176,7 @@ function targetOf(row: ProviderRow): EditorTarget {
     // route-level fields only a declared route owns off the card, exactly as
     // it leaves the custom tag off the row.
     ...row.entry.declared === true ? { declared: true } : {},
+    ...row.disablable === true ? { disableValue: { disabled: true } } : {},
   }
 }
 
@@ -272,7 +294,10 @@ function Loaded({ injected }: { injected: ModelsSectionFace }): ReactNode {
   // One fact decides both first-run postures on this page and the onboarding
   // step: whether the user already has a provider to talk to.
   const anyUsable = state.rows.some(providerUsable)
-  const configured = state.rows.filter(row => row.configured)
+  // A disabled provider (DeepSeek removed through this page) is hidden from the
+  // rows; it stays in the snapshot so the provider directory still knows it,
+  // but no row, add option, or setup card renders it.
+  const configured = state.rows.filter(row => row.configured && !row.disabled)
   const addable = state.rows.filter(row => !row.configured && row.entry.settingsNs !== '')
   const addTarget = adding ? editing : undefined
   const addNamespace = addTarget === undefined ? undefined : state.namespaces.get(addTarget.settingsNs)

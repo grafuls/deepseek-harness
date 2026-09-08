@@ -91,6 +91,7 @@ function actions(): CollabWorkspacesActions {
     previewPush: vi.fn(),
     pushBranch: vi.fn(),
     syncWorkspace: vi.fn(),
+    downloadPatch: vi.fn(),
     reorderSession: vi.fn(),
   }
 }
@@ -642,7 +643,7 @@ describe('CollabSection', () => {
     expect(row.querySelectorAll('span').length).toBeGreaterThan(0)
   })
 
-  it('offers Rename/Fork/Archive plus Push/Sync on a non-blank session row through its hover menu', () => {
+  it('offers Rename/Fork/Archive plus Download/Push/Sync on a non-blank session row through its hover menu', () => {
     section(
       readyState(),
       {},
@@ -657,11 +658,12 @@ describe('CollabSection', () => {
     expect(screen.getByRole('menuitem', { name: 'Archive session' })).toBeTruthy()
     // Alpha's repo-backed clone is settled, so its session rows also carry the
     // git verbs, routed at the session level (not the workspace level).
+    expect(screen.getByRole('menuitem', { name: 'Download patch' })).toBeTruthy()
     expect(screen.getByRole('menuitem', { name: 'Push branch' })).toBeTruthy()
     expect(screen.getByRole('menuitem', { name: 'Sync' })).toBeTruthy()
   })
 
-  it('carries no Push/Sync (and no hover branch) on sessions of a name-only workspace', () => {
+  it('carries no Download/Push/Sync (and no hover branch) on sessions of a name-only workspace', () => {
     vi.useFakeTimers()
     try {
       // `cloneState: 'none'` means the workspace has no repository to push or
@@ -674,6 +676,7 @@ describe('CollabSection', () => {
       )
       fireEvent.click(screen.getByRole('button', { name: 'Session actions for s1' }))
       expect(screen.getByRole('menuitem', { name: 'Rename' })).toBeTruthy()
+      expect(screen.queryByRole('menuitem', { name: 'Download patch' })).toBeNull()
       expect(screen.queryByRole('menuitem', { name: 'Push branch' })).toBeNull()
       expect(screen.queryByRole('menuitem', { name: 'Sync' })).toBeNull()
       fireEvent.keyDown(document, { key: 'Escape' })
@@ -766,6 +769,85 @@ describe('CollabSection', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Sync' }))
     await waitFor(() => { expect(syncWorkspace).toHaveBeenCalledWith('w1') })
     await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe('Sync failed') })
+  })
+
+  it('downloads a session branch patch from its row menu and acknowledges it', async () => {
+    const downloadPatch = vi.fn(async () => ({
+      branch: 'Alpha-s1', base: 'main', patch: 'diff --git a/file.txt b/file.txt\n+two', filename: 'Alpha-s1.patch',
+    }))
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => { })
+    const createUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock')
+    const revokeUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => { })
+    try {
+      section(
+        readyState(),
+        { downloadPatch },
+        { sessions: [sessionSummary('s1', 5)], workspaces: [hostWorkspace('hw1', 'w1', ['s1'], 'Alpha')] },
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Session actions for s1' }))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Download patch' }))
+      // The verb routes the diff at the session's own line, then hands the
+      // patch text to the browser's download (anchor + object URL).
+      await waitFor(() => { expect(downloadPatch).toHaveBeenCalledWith('w1', 'Alpha-s1') })
+      await waitFor(() => { expect(createUrl).toHaveBeenCalled() })
+      expect(clickSpy).toHaveBeenCalled()
+      expect(revokeUrl).toHaveBeenCalled()
+      await waitFor(() => { expect(screen.getByText('Patch downloaded')).toBeTruthy() })
+    } finally {
+      clickSpy.mockRestore()
+      createUrl.mockRestore()
+      revokeUrl.mockRestore()
+    }
+  })
+
+  it('surfaces a folded patch download failure as an alert above the list', async () => {
+    const downloadPatch = vi.fn(async () => undefined)
+    section(
+      readyState(),
+      { downloadPatch },
+      { sessions: [sessionSummary('s1', 5)], workspaces: [hostWorkspace('hw1', 'w1', ['s1'], 'Alpha')] },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Session actions for s1' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Download patch' }))
+    await waitFor(() => { expect(downloadPatch).toHaveBeenCalledWith('w1', 'Alpha-s1') })
+    await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe('Could not download the patch') })
+  })
+
+  it('routes the push, sync, and patch verbs from the flat session row menu', async () => {
+    const previewPush = vi.fn(async () => ({
+      pushed: false, upToDate: false, branch: 'Alpha-s1', base: 'main',
+      localSha: 'cafe01', ahead: 1, behind: 0, remote: 'https://github.com/acme/repo',
+    }))
+    const syncWorkspace = vi.fn(async () => ({ fetched: true }))
+    const downloadPatch = vi.fn(async () => ({
+      branch: 'Alpha-s1', base: 'main', patch: 'diff --git a/x b/x\n+d', filename: 'Alpha-s1.patch',
+    }))
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => { })
+    const createUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock')
+    const revokeUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => { })
+    try {
+      section(
+        readyState({ groupBy: 'flat', orderBy: 'manual' }),
+        { previewPush, syncWorkspace, downloadPatch },
+        { sessions: [sessionSummary('s1', 5)], workspaces: [hostWorkspace('hw1', 'w1', ['s1'], 'Alpha')] },
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Session actions for s1' }))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Push branch' }))
+      await waitFor(() => { expect(previewPush).toHaveBeenCalledWith('w1', 'Alpha-s1') })
+      fireEvent.click(screen.getByRole('button', { name: 'Session actions for s1' }))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Sync' }))
+      await waitFor(() => { expect(syncWorkspace).toHaveBeenCalledWith('w1') })
+      fireEvent.click(screen.getByRole('button', { name: 'Session actions for s1' }))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Download patch' }))
+      await waitFor(() => { expect(downloadPatch).toHaveBeenCalledWith('w1', 'Alpha-s1') })
+      await waitFor(() => { expect(createUrl).toHaveBeenCalled() })
+      expect(clickSpy).toHaveBeenCalled()
+      expect(revokeUrl).toHaveBeenCalled()
+    } finally {
+      clickSpy.mockRestore()
+      createUrl.mockRestore()
+      revokeUrl.mockRestore()
+    }
   })
 
   it('carries no hover menu on a blank New Session placeholder', () => {

@@ -104,6 +104,14 @@ const MODEL_MODALITIES = ['text', 'image'] as const satisfies readonly ModelModa
  * reasoning effort resolves to `high`.
  */
 export interface Config {
+  /**
+   * Whether this provider route is disabled. A disabled route is withdrawn
+   * from the adapter registry (it stops serving requests and its models leave
+   * the catalog) while the directory entry stays declared, so a configuration
+   * surface can still re-enable it. The Models page sets this when the user
+   * removes the provider.
+   */
+  disabled?: boolean
   /** Credential reference (environment-variable name) resolved per request; defaults to `DEEPSEEK_API_KEY`. */
   apiKeyEnv?: string
   /** Endpoint base; falls back to $DEEPSEEK_BASE_URL from a trusted environment layer, then the public API. */
@@ -157,6 +165,7 @@ const catalogModel: z<DeepSeekCatalogModel> = z.object({
 })
 
 export const Config: z<Config> = z.object({
+  disabled: z.boolean().default(false),
   apiKeyEnv: z.string().role('credential-ref').default(DEFAULT_API_KEY_ENV),
   baseURL: z.string(),
   thinking: z.union(['enabled', 'disabled']),
@@ -445,16 +454,25 @@ export function apply(ctx: Context, config: Config): void {
   // Route effects bind to this apply fiber via the stable `ctx` reference,
   // even when a swap runs inside the scoped settings callback below.
   const registration = ctx.llm.registerAdapter([PROVIDER], adapter)
+  // The adapter always registers `[PROVIDER]` first (an empty registration is
+  // refused and `replace([])` is how a route set is later withdrawn), so the
+  // remembered disabled state starts at "enabled" to correct any initial
+  // disabled config on the first re-judgment below.
+  let registeredDisabled = false
   let registeredPolicy = options().retryPolicy
   const ensureRegistrationFacts = (): void => {
+    const disabled = current().disabled === true
     const policy = options().retryPolicy
-    if (deepEqualJson(policy, registeredPolicy)) return
+    if (disabled === registeredDisabled && deepEqualJson(policy, registeredPolicy)) return
     // The registry captures the retry policy at registration, so it is the one
     // fact per-request resolution cannot refresh. `replace` re-reads it in one
     // synchronous registry section: disposing and re-registering instead would
     // publish an empty route set between the two, and an observer that reacted
-    // to it would see this provider disappear and come back.
-    registration.replace([PROVIDER])
+    // to it would see this provider disappear and come back. Disabling routes
+    // the provider away with the same atomic swap, keeping the directory entry
+    // so a configuration surface can still re-enable it.
+    registration.replace(disabled ? [] : [PROVIDER])
+    registeredDisabled = disabled
     registeredPolicy = policy
   }
 

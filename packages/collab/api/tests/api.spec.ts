@@ -309,6 +309,8 @@ function fakeWorkspaceRegistry(dir: string): {
   }
   createCalls: Array<{ path: string; title?: string; collabWorkspaceId?: string }>
   addConflict: (id: string, title: string) => void
+  /** Ids passed to the registry `delete` (the unregister call on workspace delete). */
+  deleteCalls: string[]
 } {
   let title = 'Team'
   const entity = {
@@ -322,6 +324,7 @@ function fakeWorkspaceRegistry(dir: string): {
   }
   const others: Array<{ id: string; title: string }> = []
   const createCalls: Array<{ path: string; title?: string; collabWorkspaceId?: string }> = []
+  const deleteCalls: string[] = []
   const createdPaths = new Set<string>()
   const registry = {
     list: () => [{ id: entity.id, title }, ...others],
@@ -344,12 +347,37 @@ function fakeWorkspaceRegistry(dir: string): {
     resolveByPath: async (path: string): Promise<typeof entity | undefined> => {
       return createdPaths.has(path) ? entity : undefined
     },
+    // The real registry deletes idempotently and reports whether a record was
+    // removed; the only deletable record here is the opened mount.
+    delete: async (id: string): Promise<boolean> => {
+      deleteCalls.push(id)
+      return id === entity.id
+    },
   }
   return {
     register: (ctx) => { ctx.provide('workspaceRegistry', registry) },
     entity,
     createCalls,
     addConflict: (id, conflictTitle) => { others.push({ id, title: conflictTitle }) },
+    deleteCalls,
+  }
+}
+
+/** A mount-registry stub for the delete-unregister edge cases: `resolveByPath`/`delete` behavior is fixed per test. */
+function registryStub(options: {
+  resolveByPath?: (path: string) => Promise<{ id: string } | undefined>
+  delete?: (id: string) => Promise<boolean>
+} = {}): { register: (ctx: Context) => void; deleteCalls: string[] } {
+  const deleteCalls: string[] = []
+  const registry = {
+    list: () => [] as Array<{ id: string; title: string }>,
+    create: async () => { throw new Error('registry create must not be reached in unregister-only tests') },
+    resolveByPath: options.resolveByPath ?? (async () => ({ id: 'host-ws-mount' })),
+    delete: options.delete ?? (async (id: string) => { deleteCalls.push(id); return true }),
+  }
+  return {
+    register: (ctx: Context) => { ctx.provide('workspaceRegistry', registry) },
+    deleteCalls,
   }
 }
 
@@ -920,6 +948,97 @@ describe('collab/workspace methods', () => {
     expect((await stat(clonePath)).isDirectory()).toBe(true)
   })
 
+  it('unregisters the Host mount when a mounted collab workspace is deleted', async () => {
+    const boot = await bootServices()
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Mounted' })) as CollabWorkspaceView
+    const dir = workspaceDataDir(boot.ctx.collabWorkspaces.root, created.id)
+    const fake = fakeWorkspaceRegistry(dir)
+    fake.register(boot.ctx)
+    // Opening mounts the collab workspace as a Host workspace registration.
+    await call(boot, boot.admin, 'collab/workspace.open', { workspaceId: created.id })
+    expect(fake.createCalls).toEqual([{ path: dir, title: 'Mounted', collabWorkspaceId: created.id }])
+    expect(fake.deleteCalls).toEqual([])
+    const deleted = value(await call(boot, boot.admin, 'collab/workspace.delete', { workspaceId: created.id }))
+    expect(deleted).toEqual({ deleted: true })
+    // The deleted collab workspace's leaked Host mount registration is removed,
+    // so it stops appearing in workspace.list (the hero picker / sidebar).
+    expect(fake.deleteCalls).toEqual([fake.entity.id])
+  })
+
+  it('leaves the registry untouched when a never-opened workspace is deleted (no mount)', async () => {
+    const boot = await bootServices()
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Unopened' })) as CollabWorkspaceView
+    const stub = registryStub({ resolveByPath: async () => undefined })
+    stub.register(boot.ctx)
+    const deleted = value(await call(boot, boot.admin, 'collab/workspace.delete', { workspaceId: created.id }))
+    expect(deleted).toEqual({ deleted: true })
+    // A never-opened workspace has no Host mount to unregister; nothing is deleted.
+    expect(stub.deleteCalls).toEqual([])
+  })
+
+  it('deletes a workspace whose mount directory is already gone without warning', async () => {
+    const boot = await bootServices()
+    const warn = vi.spyOn(boot.ctx.logger, 'warn').mockImplementation(() => {})
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Gone' })) as CollabWorkspaceView
+    const stub = registryStub({
+      resolveByPath: async () => {
+        const error = new Error('ENOENT: no such file') as NodeJS.ErrnoException
+        error.code = 'ENOENT'
+        throw error
+      },
+    })
+    stub.register(boot.ctx)
+    const deleted = value(await call(boot, boot.admin, 'collab/workspace.delete', { workspaceId: created.id }))
+    expect(deleted).toEqual({ deleted: true })
+    // A missing working directory is the no-mount case, not a cleanup failure.
+    expect(warn).not.toHaveBeenCalled()
+    expect(stub.deleteCalls).toEqual([])
+  })
+
+  it('warns when mount resolution fails for a non-missing-dir reason but still deletes', async () => {
+    const boot = await bootServices()
+    const warn = vi.spyOn(boot.ctx.logger, 'warn').mockImplementation(() => {})
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Boom' })) as CollabWorkspaceView
+    const stub = registryStub({
+      resolveByPath: async () => { throw new Error('resolution denied') },
+    })
+    stub.register(boot.ctx)
+    const deleted = value(await call(boot, boot.admin, 'collab/workspace.delete', { workspaceId: created.id }))
+    expect(deleted).toEqual({ deleted: true })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('collab mount unregister'))
+    expect(stub.deleteCalls).toEqual([])
+  })
+
+  it('warns when unregistering a known mount fails but still deletes the record', async () => {
+    const boot = await bootServices()
+    const warn = vi.spyOn(boot.ctx.logger, 'warn').mockImplementation(() => {})
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Stuck' })) as CollabWorkspaceView
+    const stub = registryStub({
+      delete: async () => { throw new Error('delete denied') },
+    })
+    stub.register(boot.ctx)
+    const deleted = value(await call(boot, boot.admin, 'collab/workspace.delete', { workspaceId: created.id }))
+    expect(deleted).toEqual({ deleted: true })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('collab mount unregister'))
+  })
+
+  it('skips mount unregistration for a mid-clone workspace (no settled mount)', async () => {
+    const boot = await bootServices()
+    boot.cloner.stall()
+    const created = value(await call(boot, boot.admin, 'collab/workspace.create', {
+      name: 'Product',
+      repoUrl: 'https://github.com/example/product.git',
+    })) as CollabWorkspaceView
+    await vi.waitFor(() => { expect(boot.cloner.calls).toHaveLength(1) })
+    const stub = registryStub()
+    stub.register(boot.ctx)
+    const deleted = value(await call(boot, boot.admin, 'collab/workspace.delete', { workspaceId: created.id }))
+    expect(deleted).toEqual({ deleted: true })
+    // A provisioning (mid-clone) record has no settled mount to unregister.
+    expect(stub.deleteCalls).toEqual([])
+    boot.cloner.release()
+  })
+
   it('setMemberRole and removeMember are admin-gated and validated', async () => {
     const boot = await bootServices()
     const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Team' })) as CollabWorkspaceView
@@ -1339,6 +1458,139 @@ describe('collab/workspace methods', () => {
         const result = await call(boot, boot.admin, 'collab/workspace.fetch', { workspaceId: id })
         expectCollabError(result, 'collab-bad-request')
       } finally { rmSync(repo, { recursive: true, force: true }) }
+    })
+  })
+
+  describe('collab/workspace.patch', () => {
+    it('produces a branch diff against the workspace mainline base', async () => {
+      const boot = await bootServices({ repoRunner: gitCloneRunner })
+      const fixture = await makeBareTrackedWork()
+      try {
+        const id = await settleRealClone(boot, fixture.work)
+        execFileSync('git', ['-C', fixture.work, 'switch', '-c', 'feature-p'], { stdio: 'pipe' })
+        writeFileSync(join(fixture.work, 'file.txt'), 'one\ntwo\n')
+        execFileSync('git', ['-C', fixture.work, 'add', '.'], { stdio: 'pipe' })
+        execFileSync('git', ['-C', fixture.work, 'commit', '-m', 'add line'], { stdio: 'pipe' })
+        const patch = value(await call(boot, boot.admin, 'collab/workspace.patch', {
+          workspaceId: id,
+          branch: 'feature-p',
+        })) as { branch: string; base: string; patch: string; filename: string }
+        expect(patch.branch).toBe('feature-p')
+        expect(patch.base).toBe('main')
+        expect(patch.filename).toBe('feature-p.patch')
+        expect(patch.patch).toContain('diff --git a/file.txt b/file.txt')
+        expect(patch.patch).toContain('+two')
+      } finally { fixture.remove() }
+    })
+
+    it('defaults to the current checkout branch when no branch is given', async () => {
+      const boot = await bootServices({ repoRunner: gitCloneRunner })
+      const fixture = await makeBareTrackedWork()
+      try {
+        const id = await settleRealClone(boot, fixture.work)
+        execFileSync('git', ['-C', fixture.work, 'switch', '-c', 'current-line'], { stdio: 'pipe' })
+        writeFileSync(join(fixture.work, 'file.txt'), 'one\ncurrent\n')
+        execFileSync('git', ['-C', fixture.work, 'add', '.'], { stdio: 'pipe' })
+        execFileSync('git', ['-C', fixture.work, 'commit', '-m', 'on current'], { stdio: 'pipe' })
+        const patch = value(await call(boot, boot.admin, 'collab/workspace.patch', { workspaceId: id })) as {
+          branch: string
+          patch: string
+        }
+        expect(patch.branch).toBe('current-line')
+        expect(patch.patch).toContain('+current')
+      } finally { fixture.remove() }
+    })
+
+    it('refuses a workspace with no settled repository clone', async () => {
+      const boot = await bootServices()
+      const created = value(await call(boot, boot.admin, 'collab/workspace.create', { name: 'Name only' })) as CollabWorkspaceView
+      const result = await call(boot, boot.admin, 'collab/workspace.patch', { workspaceId: created.id, branch: 'feature' })
+      expectCollabError(result, 'collab-not-a-repository')
+    })
+
+    it('maps a git failure to a bad-request', async () => {
+      const boot = await bootServices({ repoRunner: gitCloneRunner })
+      const notGit = mkdtempSync(join(tmpdir(), 'dsh-api-notgit-'))
+      try {
+        const id = await settleRealClone(boot, notGit)
+        const result = await call(boot, boot.admin, 'collab/workspace.patch', { workspaceId: id, branch: 'feature' })
+        expectCollabError(result, 'collab-bad-request')
+      } finally { rmSync(notGit, { recursive: true, force: true }) }
+    })
+
+    it('defaults to the real git runner when none is registered for the patch', async () => {
+      const boot = await bootServices({ noRunner: true })
+      const notGit = mkdtempSync(join(tmpdir(), 'dsh-api-notgit-'))
+      try {
+        const id = await settleRealClone(boot, notGit)
+        const result = await call(boot, boot.admin, 'collab/workspace.patch', { workspaceId: id, branch: 'feature' })
+        expectCollabError(result, 'collab-bad-request')
+      } finally { rmSync(notGit, { recursive: true, force: true }) }
+    })
+
+    it('rejects a non-plain branch name before reaching git', async () => {
+      const boot = await bootServices({ repoRunner: gitCloneRunner })
+      const fixture = await makeBareTrackedWork()
+      try {
+        const id = await settleRealClone(boot, fixture.work)
+        const result = await call(boot, boot.admin, 'collab/workspace.patch', { workspaceId: id, branch: 'bad..name' })
+        expectCollabError(result, 'collab-bad-request')
+      } finally { fixture.remove() }
+    })
+
+    it('rejects a non-member caller', async () => {
+      const boot = await bootServices({ repoRunner: gitCloneRunner })
+      const fixture = await makeBareTrackedWork()
+      try {
+        const id = await settleRealClone(boot, fixture.work)
+        const result = await call(boot, boot.member, 'collab/workspace.patch', { workspaceId: id, branch: 'feature' })
+        expectCollabError(result, 'collab-forbidden')
+      } finally { fixture.remove() }
+    })
+
+    it('surfaces a detached checkout (no explicit branch) as a bad-request', async () => {
+      const boot = await bootServices({ repoRunner: gitCloneRunner })
+      const fixture = await makeBareTrackedWork()
+      try {
+        const id = await settleRealClone(boot, fixture.work)
+        execFileSync('git', ['-C', fixture.work, 'checkout', '--detach'], { stdio: 'pipe' })
+        // The default-branch path reads the checkout, so a detached HEAD is the
+        // pushguard's wire refusal, rethrown rather than recategorized.
+        const result = await call(boot, boot.admin, 'collab/workspace.patch', { workspaceId: id })
+        expectCollabError(result, 'collab-bad-request')
+      } finally { fixture.remove() }
+    })
+
+    it('maps a diff read failure for a missing branch to a bad-request', async () => {
+      const boot = await bootServices({ repoRunner: gitCloneRunner })
+      const fixture = await makeBareTrackedWork()
+      try {
+        const id = await settleRealClone(boot, fixture.work)
+        // The name is present and charset-valid, but git rejects the three-dot
+        // read (no such branch), which is a plain git failure, not a wire error.
+        const result = await call(boot, boot.admin, 'collab/workspace.patch', { workspaceId: id, branch: 'no-such-branch' })
+        expectCollabError(result, 'collab-bad-request')
+      } finally { fixture.remove() }
+    })
+
+    it('maps a diff failure on the current-branch default to a bad-request', async () => {
+      const boot = await bootServices({
+        repoRunner: async (command, args) => {
+          const key = args.slice(2).join(' ')
+          if (key === 'rev-parse --abbrev-ref HEAD') return { stdout: 'main', stderr: '' }
+          if (key === 'symbolic-ref --short refs/remotes/origin/HEAD') return { stdout: 'origin/main', stderr: '' }
+          if (key.startsWith('diff ')) throw new Error('diff exploded')
+          throw new Error(`unexpected git ${command} ${key}`)
+        },
+      })
+      const fixture = await makeBareTrackedWork()
+      try {
+        const id = await settleRealClone(boot, fixture.work)
+        // No explicit branch falls back to the checkout branch; the diff then
+        // fails, which is a plain git failure surfaced as a bad-request.
+        const result = await call(boot, boot.admin, 'collab/workspace.patch', { workspaceId: id })
+        expectCollabError(result, 'collab-bad-request')
+      } finally { fixture.remove() }
     })
   })
 })

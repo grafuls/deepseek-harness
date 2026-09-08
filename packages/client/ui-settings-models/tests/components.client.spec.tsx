@@ -313,6 +313,8 @@ describe('ModelsSection', () => {
       entry,
       configured: true,
       removable: false,
+      disablable: false,
+      disabled: false,
       apiKeyEnv: 'X',
       credential,
     })
@@ -1322,6 +1324,48 @@ describe('ModelsSection', () => {
       ns: 'llm-pi-ai',
       ops: [{ op: 'unset', path: ['providers', 'zombie'] }],
     })
+  })
+
+  it('deletes a disablable whole-section provider by disabling its section and dropping its key', async () => {
+    // The DeepSeek section declares a `disabled` slot once the namespace value
+    // carries it, so the row becomes removable and the delete disables it.
+    const scripted = scriptedFace()
+    scripted.face.settings.describe.mockImplementation(() => Promise.resolve(ok({
+      writable: true,
+      hasDocument: false,
+      namespaces: wireNamespaces().map(ns => ns.ns === 'llm-deepseek'
+        ? { ...ns, value: { ...ns.value, disabled: false }, base: { ...ns.base, disabled: false } }
+        : ns),
+    })))
+    scripted.face.credentials.describe.mockImplementation((payload: { refs: string[] }) =>
+      Promise.resolve(ok({
+        credentials: Object.fromEntries(payload.refs.map(ref => [ref, { configured: true, source: 'file', writable: true }])),
+      })))
+    const { mutate, unset } = await mountFace(scripted)
+    fireEvent.click(screen.getByRole('button', { name: deepSeekCopy(en.removeProvider) }))
+    const dialog = screen.getByRole('dialog', { name: deepSeekCopy(en.deleteTitle) })
+    fireEvent.click(within(dialog).getByRole('button', { name: deepSeekCopy(en.deleteConfirm) }))
+    await waitFor(() => { expect(mutate).toHaveBeenCalledOnce() })
+    expect(unset).toHaveBeenCalledWith({ ref: 'DEEPSEEK_API_KEY' })
+    expect(mutate.mock.calls[0]?.[0]).toEqual({
+      ns: 'llm-deepseek',
+      ops: [{ op: 'set', path: [], value: { disabled: true } }],
+    })
+  })
+
+  it('hides a disabled whole-section provider from the rows', async () => {
+    const scripted = scriptedFace()
+    scripted.face.settings.describe.mockImplementation(() => Promise.resolve(ok({
+      writable: true,
+      hasDocument: false,
+      namespaces: wireNamespaces().map(ns => ns.ns === 'llm-deepseek'
+        ? { ...ns, value: { ...ns.value, disabled: true }, base: { ...ns.base, disabled: false } }
+        : ns),
+    })))
+    await mountFace(scripted)
+    expect(screen.queryByText('DeepSeek')).toBeNull()
+    expect(screen.queryByRole('button', { name: deepSeekCopy(en.editProvider) })).toBeNull()
+    expect(screen.queryByRole('button', { name: deepSeekCopy(en.removeProvider) })).toBeNull()
   })
 
   it('does not remove provider settings when its managed credential removal is refused', async () => {

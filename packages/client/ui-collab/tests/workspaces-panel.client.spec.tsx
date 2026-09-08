@@ -48,6 +48,7 @@ function actions(): CollabWorkspacesActions {
     previewPush: vi.fn(),
     pushBranch: vi.fn(),
     syncWorkspace: vi.fn(),
+    downloadPatch: vi.fn(),
     reorderSession: vi.fn(),
   }
 }
